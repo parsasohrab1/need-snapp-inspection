@@ -1,0 +1,9 @@
+[project]
+name = "need-snapp-inspection"
+version = "0.5.0"
+description = "Snapp-style dispatch of third-party inspectors against an inspection and test plan."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
