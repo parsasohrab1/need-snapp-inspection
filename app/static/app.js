@@ -251,7 +251,6 @@ function login() {
     ["executive", "مدیر اجرایی", "تأیید نهایی و دسترسی کامل به فرم‌ها"],
     ["coordinator", "هماهنگ‌کننده اعزام", "پیگیری اعزام و گزارش‌های بازرسی"],
     ["inspector.reza", "بازرس جوش", "پذیرش پیشنهاد، حضور در کارگاه، IVR"],
-    ["vendor", "سازنده", "بارگذاری مدارک و اعلام آمادگی"],
   ];
   app.innerHTML = `
     ${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ""}
