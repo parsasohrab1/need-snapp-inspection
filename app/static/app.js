@@ -363,13 +363,15 @@ function managerTray(reports) {
 function clientTray(reports) {
   const cards = (reports || []).map((row) => reportCard(row, `
     <div class="actions">
+      ${row.request_form_id ? `<button class="ghost" data-act="open-sheet" data-id="${row.request_form_id}" data-kind="in">مشاهده فرم IN ثبت‌شده</button>` : ""}
+      <button class="ghost" data-act="open-ivr" data-id="${row.visit_id}">مشاهده گزارش و همه پیوست‌ها · ${Number(row.evidence_count || 0).toLocaleString("fa-IR")} فایل بازرسی · ${Number(row.document_count || 0).toLocaleString("fa-IR")} مدرک</button>
       <button class="primary" data-act="confirm-report" data-id="${row.visit_id}">تأیید کارفرما</button>
       <label>دلیل رد<input id="client-reject-note-${row.visit_id}" minlength="3" maxlength="2000" placeholder="در صورت رد، دلیل را بنویسید"></label>
       <button class="warn" data-act="client-reject-report" data-id="${row.visit_id}">رد گزارش</button>
     </div>`)).join("");
   return `<section class="card pad tray">
-    <h3>کارتابل کارفرما</h3>
-    <p class="hint">تأیید نهایی، صورت‌وضعیت و فاکتور را برای کارفرما صادر می‌کند.</p>
+    <h3>درخواست‌های IN انجام‌شده · گزارش‌های تأییدشدهٔ مدیر پروژه</h3>
+    <p class="hint">فرم IN ثبت‌شده، گزارش تکمیل‌شده، چک‌لیست، مدارک پروژه و همهٔ عکس‌ها و پیوست‌های بارگذاری‌شده را بازبینی کنید. تأیید نهایی، صورت‌وضعیت و فاکتور را صادر می‌کند.</p>
     <div class="picked-list">${cards || `<p class="empty">گزارش تأییدشده‌ای ننشسته است.</p>`}</div>
   </section>`;
 }
@@ -534,21 +536,24 @@ function buyerRequestTray(board) {
   };
   return `<section class="card pad">
     <h3>درخواست‌های بازرسی کارفرما</h3>
-    <p class="hint">درخواست‌های ثبت‌شده را باز کنید یا برای یک نقطهٔ آماده، IN جدید بسازید.</p>
+    <p class="hint">برای درخواست تازه، فرم خام IN را تکمیل و ارسال کنید. درخواست‌های ارسال‌شده برای پیگیری و مشاهدهٔ فرم ثبت‌شده در این بخش می‌مانند.</p>
     <div class="buyer-request-panels">
       <details class="buyer-request-box" ${state.buyerRequestPanels[0] ? "open" : ""}>
-        <summary><span>درخواست‌های ثبت‌شده</span><span class="chip">${requests.length.toLocaleString("fa-IR")}</span></summary>
+        <summary><span>فرم‌های IN ارسال‌شده به مدیر پروژه</span><span class="chip">${requests.length.toLocaleString("fa-IR")}</span></summary>
         <div class="buyer-request-list">${requests.map((row) => `
           <div class="person">
             <span>${esc(row.tag)} · ${esc(row.title)}<small>${esc(row.project_name)} · ${esc(requestStatus[row.request_status] || row.request_status)}</small></span>
-            <button class="ghost" data-act="open-point" data-id="${row.id}">مشاهده درخواست</button>
+            <span class="actions">
+              ${row.request_form_id ? `<button class="ghost" data-act="open-sheet" data-id="${row.request_form_id}" data-kind="in">مشاهده فرم IN</button>` : ""}
+              <button class="ghost" data-act="open-point" data-id="${row.id}">پیگیری درخواست</button>
+            </span>
           </div>`).join("") || `<p class="empty">هنوز درخواستی ثبت نشده است.</p>`}</div>
       </details>
       <details class="buyer-request-box" ${state.buyerRequestPanels[1] ? "open" : ""}>
-        <summary><span>ثبت IN جدید</span><span class="chip">${eligible.length.toLocaleString("fa-IR")}</span></summary>
+        <summary><span>فرم خام · ثبت درخواست IN جدید</span><span class="chip">${eligible.length.toLocaleString("fa-IR")}</span></summary>
         <div class="buyer-request-list">
-          <p>همهٔ نقاط قابل درخواست از داخل یک فرم انتخاب می‌شوند.</p>
-          <button class="primary" data-act="begin-in-request" ${eligible.length ? "" : "disabled"}>ایجاد درخواست IN جدید</button>
+          <p>فرم خام پس از انتخاب نقطه تکمیل می‌شود؛ با ثبت نهایی، فرم به کارتابل مدیر پروژه ارسال خواهد شد.</p>
+          <button class="primary" data-act="begin-in-request" ${eligible.length ? "" : "disabled"}>انتخاب نقطه و تکمیل فرم خام IN</button>
         </div>
       </details>
     </div>
@@ -1029,8 +1034,6 @@ async function renderPoint() {
           ${state.me.role === "vendor" && ["planned", "ready"].includes(point.status) ? `<button class="primary" data-act="ready" data-id="${point.id}" data-remote="${point.remote_allowed ? "1" : "0"}">اعلام آمادگی</button>` : ""}
           ${["coordinator", "admin"].includes(state.me.role) && point.status === "ready" && point.request_status === "approved_no_inspector" ? `<button class="primary" data-act="broadcast" data-id="${point.id}">ارسال به بازرسان نزدیک</button>` : ""}
           ${latest ? `<button class="ghost" data-act="open-ivr" data-id="${latest.id}">گزارش IVR</button>` : ""}
-          ${latest && latest.phase === "submitted" && ["manager", "coordinator", "admin"].includes(state.me.role) && latest.result === "accept" ? `<button class="primary" data-act="review" data-id="${latest.id}" data-decision="approve">تأیید و ارسال به کارفرما</button>` : ""}
-          ${latest && latest.phase === "submitted" && ["manager", "coordinator", "admin"].includes(state.me.role) ? `<button class="warn" data-act="review" data-id="${latest.id}" data-decision="return">برگرداندن به‌خاطر مغایرت</button>` : ""}
         </div>
         ${canReturn ? `<div class="archive-upload">
           <label>دلیل مرجوعی<input id="request-return-reason" minlength="3" maxlength="2000" placeholder="دلیل مرجوعی را وارد کنید"></label>
@@ -1082,9 +1085,18 @@ async function renderIvr(visitId) {
       ${report.visit.review_note ? `<p class="chip wait">یادداشت مرجوعی: ${esc(report.visit.review_note)}</p>` : ""}
       ${report.visit.arrive_distance_km != null ? `<p>فاصله ورود تا کارگاه: ${Number(report.visit.arrive_distance_km).toLocaleString("fa-IR")} کیلومتر</p>` : ""}
       <h3>چک‌لیست</h3>
-      <ul>${report.answers.map((row) => `<li>${esc(row.item_id)}: ${esc(row.value)} ${esc(row.note)}</li>`).join("")}</ul>
+      <ul>${report.answers.map((row) => {
+        const item = report.context.point.checklist.find((entry) => entry.id === row.item_id);
+        return `<li>${esc(item?.text || row.item_id)}: ${esc(row.value)} ${esc(row.note)}</li>`;
+      }).join("")}</ul>
+      <h3>مدارک درخواست و پروژه</h3>
+      <div class="picked-list">${(report.context.documents || []).map((document) => `
+        <div class="person">
+          <span>${esc(document.label)} · ${esc(document.title || document.filename || "مدرک")}</span>
+          ${document.download_url ? `<a class="ghost" href="${esc(document.download_url)}" target="_blank" rel="noopener">مشاهده / دریافت ${esc(document.filename || "فایل")}</a>` : `<small>فایلی بارگذاری نشده است</small>`}
+        </div>`).join("") || `<p class="empty">مدرکی برای این تجهیز بارگذاری نشده است.</p>`}</div>
       <h3>پیوست‌های بازرسی</h3>
-      <div class="gallery">${report.photos.map((row) => `<figure>${row.url ? (row.media_type?.startsWith("video/") ? `<video src="${esc(row.url)}" controls></video>` : row.media_type?.startsWith("image/") ? `<img src="${esc(row.url)}" alt="${esc(row.caption)}">` : `<a href="${esc(row.url)}">دریافت ${esc(row.filename || "فایل")}</a>`) : ""}<figcaption>${esc(row.kind === "environment" ? "محیط" : row.kind === "marker" ? "پیکان‌کار" : "مورد بازرسی")} · ${esc(row.caption || row.filename || "")}</figcaption></figure>`).join("") || "<p>پیوستی ثبت نشده است.</p>"}</div>
+      <div class="gallery">${report.photos.map((row) => `<figure>${row.url ? (row.media_type?.startsWith("video/") ? `<video src="${esc(row.url)}" controls></video>` : row.media_type?.startsWith("image/") ? `<img src="${esc(row.url)}" alt="${esc(row.caption)}">` : "") : ""}${row.url ? `<a href="${esc(row.url)}" target="_blank" rel="noopener" download="${esc(row.filename || "")}">مشاهده / دریافت ${esc(row.filename || "پیوست")}</a>` : ""}<figcaption>${esc(row.kind === "environment" ? "محیط" : row.kind === "marker" ? "پیکان‌کار" : "مورد بازرسی")} · ${esc(row.caption || row.filename || "")}</figcaption></figure>`).join("") || "<p>پیوستی ثبت نشده است.</p>"}</div>
       ${canAttach ? `<div class="archive-upload"><label>بارگذاری عکس، ویدئو یا مدرک<input id="visit-attachment" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt"></label><button class="primary" data-act="upload-visit-attachment" data-id="${report.visit.id}">پیوست به گزارش</button><p class="hint">بارگذاری فقط پس از تأیید موقعیت جغرافیایی فعال است.</p></div>` : ""}
       <h3>گفت‌وگو درباره گزارش</h3>
       <div class="stack">${comments.map((comment) => `<div class="person"><span><b>${esc(comment.author)}</b><small>${esc(comment.body)}</small></span><small>${esc(comment.created_at)}</small></div>`).join("") || "<p>نظری ثبت نشده است.</p>"}</div>
@@ -1418,6 +1430,7 @@ async function renderWallet() {
       <div class="kpi"><span>ناخالص</span><strong>${money(ledger.fee_irr)}</strong></div>
       <div class="kpi"><span>سهم سامانه</span><strong>${money(ledger.commission_irr)}</strong></div>
       <div class="kpi"><span>خالص بازرس</span><strong>${money(ledger.net_irr)}</strong></div>
+      ${ledger.travel_irr == null ? "" : `<div class="kpi"><span>ایاب‌وذهاب یک‌طرفه (۱٬۲۰۰ تومان/کیلومتر)</span><strong>${money(ledger.travel_irr)}</strong></div>`}
     </div>`
   );
 }

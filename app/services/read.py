@@ -361,7 +361,14 @@ def point_detail(session: Session, point_id: int, actor: User | None = None) -> 
         },
         "companies": {"buyer": buyer.name, "vendor": vendor.name},
         "documents": [
-            {"id": doc.id, "type": doc.doc_type, "label": DOC_LABELS.get(doc.doc_type, doc.doc_type), "title": doc.title, "filename": doc.filename}
+            {
+                "id": doc.id,
+                "type": doc.doc_type,
+                "label": DOC_LABELS.get(doc.doc_type, doc.doc_type),
+                "title": doc.title,
+                "filename": doc.filename,
+                "download_url": f"/api/documents/{doc.id}/file" if doc.stored_name else "",
+            }
             for doc in docs
         ],
         "offers": [
@@ -658,7 +665,7 @@ def stage_history(session: Session, focus_point_id: int) -> list[dict]:
     ).all()
     by_id = {point.id: point for point in points}
     visits = session.scalars(
-        select(Visit).where(Visit.point_id.in_(list(by_id)), Visit.phase.in_(("submitted", "closed", "client", "confirmed"))).order_by(Visit.id)
+        select(Visit).where(Visit.point_id.in_(list(by_id)), Visit.phase.in_(("on_site", "submitted", "closed", "client", "confirmed"))).order_by(Visit.id)
     ).all()
     if not visits:
         return []
@@ -742,6 +749,15 @@ def visit_ivr(session: Session, visit_id: int, actor: User | None = None) -> dic
             "id": visit.id,
             "ivr_no": visit.ivr_no or "پیش‌نویس",
             "phase": visit.phase,
+            "report_stage": visit.report_stage,
+            "report_stage_label": {
+                "unit_review": "در انتظار مدیر واحد",
+                "manager_review": "در انتظار مدیر پروژه",
+                "client_review": "در انتظار کارفرما",
+                "inspector_revision": "در انتظار اصلاح بازرس",
+                "confirmed": "تأیید نهایی کارفرما",
+            }.get(visit.report_stage, visit.report_stage),
+            "review_note": visit.review_note,
             "result": visit.result,
             "note": visit.note,
             "remote": visit.remote,
@@ -1181,6 +1197,23 @@ def _report_rows(session: Session, actor: User, phase: str, report_stage: str | 
     user_ids = [row.user_id for row in inspectors.values()]
     users = {row.id: row for row in session.scalars(select(User).where(User.id.in_(user_ids))).all()}
     visit_ids = [visit.id for visit in visits]
+    evidence_counts: dict[int, int] = {}
+    if visit_ids:
+        evidence_counts = dict(
+            session.execute(
+                select(Evidence.visit_id, func.count(Evidence.id))
+                .where(Evidence.visit_id.in_(visit_ids))
+                .group_by(Evidence.visit_id)
+            ).all()
+        )
+    equipment_ids = {points[visit.point_id].equipment_id for visit in visits}
+    document_counts = dict(
+        session.execute(
+            select(Document.equipment_id, func.count(Document.id))
+            .where(Document.equipment_id.in_(equipment_ids), Document.stored_name.is_not(None))
+            .group_by(Document.equipment_id)
+        ).all()
+    ) if equipment_ids else {}
     answers = session.scalars(select(ChecklistAnswer).where(ChecklistAnswer.visit_id.in_(visit_ids), ChecklistAnswer.value == "fail")).all()
     by_visit = {visit.id: visit for visit in visits}
     failed: dict[int, list[str]] = {}
@@ -1198,12 +1231,15 @@ def _report_rows(session: Session, actor: User, phase: str, report_stage: str | 
             {
                 "visit_id": visit.id,
                 "point_id": point.id,
+                "request_form_id": point.request_form_id,
                 "ivr_no": visit.ivr_no,
                 "result": visit.result,
                 "note": visit.note,
                 "submitted_at": None if visit.submitted_at is None else visit.submitted_at.isoformat(sep=" ", timespec="seconds"),
                 "tag": item.tag,
                 "title": point.title,
+                "evidence_count": evidence_counts.get(visit.id, 0),
+                "document_count": document_counts.get(item.id, 0),
                 "inspector": user.name if user else "",
                 "defects": failed.get(visit.id, []),
             }
@@ -1396,7 +1432,14 @@ def list_notifications(session: Session, actor: User) -> list[dict]:
     notifications = []
     for row in rows:
         target = None
-        if row.title == "گزارش تأییدشده در کارتابل نشست":
+        if row.title in {
+            "گزارش بازرسی نیازمند بررسی مدیر واحد",
+            "گزارش بازرسی نیازمند تأیید مدیر پروژه",
+            "گزارش تأییدشده در کارتابل کارفرما",
+            "گزارش برای اصلاح برگشت",
+            "گزارش برای بررسی مجدد مدیر واحد برگشت",
+            "گزارش بازرسی برای بررسی مجدد برگشت",
+        }:
             ivr_no = row.body.split(" — ", 1)[0].strip()
             visit = session.scalar(select(Visit).where(Visit.ivr_no == ivr_no)) if ivr_no else None
             if visit is not None and can_access_visit(session, actor, visit):
@@ -1420,12 +1463,15 @@ def ledger_summary(session: Session, actor: User) -> dict:
     if inspector and actor.role == "inspector":
         query = query.where(Ledger.inspector_id == inspector.id)
     rows = session.scalars(query).all()
-    return {
+    result = {
         "count": len(rows),
         "fee_irr": sum(row.fee_irr for row in rows),
         "commission_irr": sum(row.commission_irr for row in rows),
         "net_irr": sum(row.net_irr for row in rows),
     }
+    if actor.role in {"inspector", "manager", "unit_manager"}:
+        result["travel_irr"] = sum(row.travel_irr for row in rows)
+    return result
 
 
 def dump_user(user: User, session: Session) -> dict:

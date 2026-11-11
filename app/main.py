@@ -232,6 +232,26 @@ def request_inspection(
         in_payload["number"] = f"IN-{point_id}-{engine.utcnow():%Y%m%d%H%M%S}"
     if not str(in_payload.get("date", "")).strip():
         in_payload["date"] = engine.utcnow().strftime("%Y-%m-%d")
+    detail = views.point_detail(db, point_id, actor)
+    in_defaults = {
+        "customer_location": "iran",
+        "client": detail["companies"]["buyer"],
+        "project": detail["project"]["name"],
+        "po": detail["order"]["number"],
+        "contractor": detail["companies"]["vendor"],
+        "vendor": detail["companies"]["vendor"],
+        "manufacturer": detail["companies"]["vendor"],
+        "location": f"{detail['equipment']['workshop_name']}، {detail['equipment']['city']}",
+        "tag": detail["equipment"]["tag"],
+        "itp_item": str(detail["point"]["seq"]),
+        "discipline": detail["point"]["discipline_label"],
+        "reference": detail["point"]["standard_ref"],
+        "scope": detail["point"]["title"],
+        "category": "درخواست بازرسی",
+    }
+    for key, value in in_defaults.items():
+        if not str(in_payload.get(key, "")).strip():
+            in_payload[key] = value
     form_sheet = form_sheets.save_sheet(db, actor, "in", in_payload, None)
     point = engine.request_inspection(
         db,

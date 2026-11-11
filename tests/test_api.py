@@ -215,20 +215,59 @@ def test_blank_forms_start_empty_and_keep_filled_lines():
                 assert all(value == "" for row in body["payload"][table["key"]] for value in row.values())
         international = client.post(
             "/api/forms",
-            json={"kind": "in", "payload": {"customer_location": "international", "client": "Overseas client"}},
+            json={
+                "kind": "in",
+                "payload": {
+                    "customer_location": "international",
+                    "client": "Overseas client",
+                    "number": "IN-OVERSEAS-1",
+                    "date": "2026-11-11",
+                    "project": "Project A",
+                    "po": "PO-1",
+                    "location": "Workshop",
+                    "tag": "V-1",
+                    "itp_item": "1",
+                    "discipline": "mechanical",
+                    "reference": "ASME",
+                    "scope": "Material check",
+                    "category": "inspection",
+                },
+            },
         )
         assert international.status_code == 200
         international_form = client.get(f"/api/forms/{international.json()['id']}").json()
         assert international_form["payload"]["customer_location"] == "international"
         assert international_form["payload"]["client"] == "Overseas client"
-        saved = client.post("/api/forms", json={"kind": "itp", "payload": {"number": "ITP-1", "lines": [{"item": "1", "intervention": "H"}]}})
+        saved = client.post(
+            "/api/forms",
+            json={
+                "kind": "itp",
+                "payload": {
+                    "number": "ITP-1",
+                    "date": "2026-11-11",
+                    "client": "Client A",
+                    "vendor": "Vendor A",
+                    "project": "Project A",
+                    "po": "PO-1",
+                    "tag": "V-1",
+                    "code": "ASME",
+                    "lines": [{
+                        "item": "1",
+                        "activity": "Material check",
+                        "reference": "ASME",
+                        "criteria": "Approved",
+                        "intervention": "H",
+                    }],
+                },
+            },
+        )
         assert saved.status_code == 200
         stored = client.get(f"/api/forms/{saved.json()['id']}").json()
         assert stored["payload"]["number"] == "ITP-1"
         assert stored["payload"]["lines"][0]["item"] == "1"
         assert stored["payload"]["lines"][0]["intervention"] == "H"
         assert stored["payload"]["lines"][1]["activity"] == ""
-        assert stored["payload"]["client"] == ""
+        assert stored["payload"]["client"] == "Client A"
 
 
 def test_mobile_photos_of_item_place_and_marker():
@@ -328,7 +367,7 @@ def test_project_manager_review_releases_or_returns_report():
         assert any(row["visit_id"] == report["visit_id"] for row in released)
         report_notification = next(
             row for row in client.get("/api/notifications").json()
-            if row["title"] == "گزارش تأییدشده در کارتابل نشست"
+            if row["title"] == "گزارش تأییدشده در کارتابل کارفرما"
         )
         assert report_notification["target"] == {"type": "ivr", "id": report["visit_id"]}
         client.post("/api/auth/login", json={"username": "vendor", "password": "demo1234"})
@@ -340,14 +379,108 @@ def test_project_manager_returns_report_when_discrepant():
     with TestClient(app) as client:
         client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
         report = client.get("/api/reports/inbox").json()[0]
-        returned = client.post(f"/api/visits/{report['visit_id']}/review", json={"decision": "return"})
+        returned = client.post(
+            f"/api/visits/{report['visit_id']}/review",
+            json={"decision": "return", "note": "مدارک گزارش باید توسط مدیر واحد دوباره بررسی شود"},
+        )
         assert returned.status_code == 200
+        assert returned.json()["visit"]["report_stage"] == "unit_review"
         detail = client.get(f"/api/points/{report['point_id']}").json()
-        assert detail["point"]["status"] == "ready"
-        assert detail["point"]["ncr_open"] is True
+        assert detail["point"]["status"] == "submitted"
+        client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+        assert any(row["visit_id"] == report["visit_id"] for row in client.get("/api/unit-manager/desk").json()["reports"])
         client.post("/api/auth/login", json={"username": "buyer", "password": "demo1234"})
         released = client.get("/api/reports/client").json()
         assert all(row["visit_id"] != report["visit_id"] for row in released)
+
+
+def test_report_pipeline_reaches_buyer_and_creates_invoice_only_after_confirmation():
+    reset_engine()
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+        report = next(
+            row for row in client.get("/api/unit-manager/desk").json()["reports"]
+            if row["result"] == "accept"
+        )
+        before = client.post(f"/api/visits/{report['visit_id']}/review", json={"decision": "approve"})
+        assert before.status_code == 200
+        assert before.json()["visit"]["report_stage"] == "manager_review"
+        client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
+        assert any(row["visit_id"] == report["visit_id"] for row in client.get("/api/reports/inbox").json())
+
+        manager_approved = client.post(
+            f"/api/visits/{report['visit_id']}/review",
+            json={"decision": "approve"},
+        )
+        assert manager_approved.status_code == 200
+        assert manager_approved.json()["visit"]["report_stage"] == "client_review"
+
+        client.post("/api/auth/login", json={"username": "buyer", "password": "demo1234"})
+        released = next(
+            row for row in client.get("/api/reports/client").json()
+            if row["visit_id"] == report["visit_id"]
+        )
+        assert released["evidence_count"] >= 0
+        assert released["document_count"] >= 0
+        ivr = client.get(f"/api/visits/{report['visit_id']}/ivr")
+        assert ivr.status_code == 200
+        report_detail = ivr.json()
+        assert report_detail["visit"]["report_stage"] == "client_review"
+        assert report_detail["answers"]
+        assert all("download_url" in document for document in report_detail["context"]["documents"])
+        assert all("url" in evidence for evidence in report_detail["photos"])
+        assert all(row["visit_id"] != report["visit_id"] for row in client.get("/api/bills").json())
+        confirmed = client.post(f"/api/visits/{report['visit_id']}/confirm")
+        assert confirmed.status_code == 200
+        assert confirmed.json()["visit"]["report_stage"] == "confirmed"
+        assert any(row["visit_id"] == report["visit_id"] for row in client.get("/api/bills").json())
+
+
+def test_unit_manager_returns_report_to_inspector_for_revision():
+    reset_engine()
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+        report = next(
+            row for row in client.get("/api/unit-manager/desk").json()["reports"]
+            if row["result"] == "reject"
+        )
+        returned = client.post(
+            f"/api/visits/{report['visit_id']}/review",
+            json={"decision": "return", "note": "پیوست‌های اصلاحی و نتیجه آزمون را تکمیل کنید"},
+        )
+        assert returned.status_code == 200
+        assert returned.json()["visit"]["phase"] == "on_site"
+        assert returned.json()["visit"]["report_stage"] == "inspector_revision"
+
+        active_visit = None
+        for username in (
+            "inspector.reza",
+            "inspector.maryam",
+            "inspector.hossein",
+            "inspector.sara",
+            "inspector.kaveh",
+            "inspector.elham",
+            "inspector.payam",
+            "inspector.nima",
+        ):
+            client.post("/api/auth/login", json={"username": username, "password": "demo1234"})
+            current = client.get("/api/visits/active").json()
+            if current and current["visit"]["id"] == report["visit_id"]:
+                active_visit = current
+                break
+        assert active_visit is not None
+        checklist = active_visit["context"]["point"]["checklist"]
+        answers = [{"item_id": row["id"], "value": "pass", "note": ""} for row in checklist]
+        assert client.post(
+            f"/api/visits/{report['visit_id']}/checklist",
+            json={"answers": answers},
+        ).status_code == 200
+        resubmitted = client.post(
+            f"/api/visits/{report['visit_id']}/submit",
+            json={"result": "accept", "note": "موارد اصلاح شد و بازرسی دوباره انجام شد"},
+        )
+        assert resubmitted.status_code == 200
+        assert resubmitted.json()["visit"]["report_stage"] == "unit_review"
 
 
 def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp_path):
@@ -539,12 +672,12 @@ def test_client_can_reject_reviewed_report_with_reason_and_manager_sees_it():
             json={"reason": "گواهی پیوست‌شده نیازمند اصلاح است"},
         )
         assert rejected.status_code == 200
-        assert rejected.json()["phase"] == "closed"
+        assert rejected.json()["phase"] == "submitted"
         company_record = client.get("/api/company/inspections")
-        row = next(item for item in company_record.json() if item["visit_id"] == report["visit_id"])
-        assert row["client_rejection_note"] == "گواهی پیوست‌شده نیازمند اصلاح است"
+        assert all(item["visit_id"] != report["visit_id"] for item in company_record.json())
 
         client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
+        assert any(row["visit_id"] == report["visit_id"] for row in client.get("/api/reports/inbox").json())
         desk = client.get("/api/manager/desk").json()
         rejected_row = next(row for row in desk["rejected_reports"] if row["visit_id"] == report["visit_id"])
         assert rejected_row["reason"] == "گواهی پیوست‌شده نیازمند اصلاح است"

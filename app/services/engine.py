@@ -1039,6 +1039,7 @@ def submit_visit(session: Session, visit_id: int, actor: User, result: str, note
     visit.report_stage = "unit_review"
     visit.review_note = ""
     visit.result = result
+    point.ncr_open = result == "reject"
     visit.note = note.strip()
     visit.submitted_at = utcnow()
     visit.ivr_no = f"IVR-{visit.submitted_at:%Y}-{visit.id:05d}"
@@ -1100,50 +1101,6 @@ def _notify_return(session: Session, point: InspectionPoint, visit: Visit) -> No
     )
 
 
-def _legacy_review_visit(session: Session, visit_id: int, actor: User, decision: str) -> Visit:
-    _require(actor, PM_ROLES)
-    visit = _visit(session, visit_id)
-    point = _point(session, visit.point_id)
-    if actor.role == "manager":
-        buyer_sees(session, actor, point)
-    if visit.phase != "submitted" or point.status != "submitted":
-        raise DomainError("illegal_transition", "فقط گزارش ارسال‌شده بازبینی می‌شود.", 409)
-    now = utcnow()
-    if decision in {"approve", "accept"}:
-        if visit.result != "accept":
-            raise DomainError("result_conflict", "گزارش مردود را نمی‌توان تأیید کرد. باید برگردد.", 409)
-        point.status = move_point("submitted", "accepted")
-        point.ncr_open = False
-        visit.phase = "client"
-        visit.reviewed_at = now
-        offer = session.get(Offer, visit.offer_id) if visit.offer_id else None
-        if offer and session.scalar(select(Ledger.id).where(Ledger.visit_id == visit.id)) is None:
-            session.add(
-                Ledger(
-                    visit_id=visit.id,
-                    inspector_id=visit.inspector_id,
-                    fee_irr=offer.fee_irr,
-                    commission_irr=offer.commission_irr,
-                    net_irr=offer.net_irr,
-                )
-            )
-        audit(session, "visit", visit.id, "review_accept", actor, visit.ivr_no)
-        _notify_client(session, point, visit)
-    elif decision in {"return", "confirm_ncr"}:
-        if decision == "confirm_ncr" and visit.result != "reject":
-            raise DomainError("result_conflict", "فقط گزارش مردود به عدم انطباق تبدیل می‌شود.", 409)
-        point.status = move_point("submitted", "ready")
-        point.ncr_open = True
-        point.remote_requested = False
-        visit.phase = "closed"
-        visit.reviewed_at = now
-        audit(session, "visit", visit.id, "ncr" if decision == "confirm_ncr" else "return", actor, visit.note)
-        _notify_return(session, point, visit)
-    else:
-        raise DomainError("bad_decision", "تصمیم بازبینی تأیید یا برگرداندن به‌خاطر مغایرت است.", 400)
-    return visit
-
-
 def review_visit(session: Session, visit_id: int, actor: User, decision: str, note: str = "") -> Visit:
     _require(actor, {"manager", "unit_manager", "admin"})
     visit = _visit(session, visit_id)
@@ -1172,6 +1129,7 @@ def review_visit(session: Session, visit_id: int, actor: User, decision: str, no
             raise DomainError("result_conflict", "گزارش مردود را نمی‌توان تأیید کرد. باید برگردد.", 409)
         if visit.report_stage == "unit_review":
             visit.report_stage = "manager_review"
+            visit.reviewed_at = now
             managers = session.scalars(
                 select(User).where(User.role == "manager", User.company_id == project.buyer_company_id)
             ).all()

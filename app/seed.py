@@ -270,6 +270,14 @@ def seed_demo(session: Session) -> None:
     submitted.unit_manager_id = unit_manager.id
     _point, visit, user = _open_visit(session, submitted, coordinator, vendor, remote=False)
     _finish_pass(session, submitted, visit, user)
+    review_visit(session, visit.id, unit_manager, "approve")
+
+    unit_review_point = ready_points.pop(0)
+    unit_review_point.unit_manager_id = unit_manager.id
+    _point, unit_review_visit, unit_review_inspector = _open_visit(
+        session, unit_review_point, coordinator, vendor, remote=False
+    )
+    _finish_pass(session, unit_review_point, unit_review_visit, unit_review_inspector)
 
     hossein = session.scalar(select(User).where(User.username == "inspector.hossein"))
     hossein_inspector = session.scalar(select(Inspector).where(Inspector.user_id == hossein.id))
