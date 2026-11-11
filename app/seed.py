@@ -84,7 +84,15 @@ def _finish_pass(session, point, visit, user: User) -> None:
     if point.point_type in {"H", "W"} and not visit.remote:
         add_site_photos(session, visit.id, user, visit.arrive_lat, visit.arrive_lng)
     note = "بازبینی مدارک از راه دور انجام شد و ردیابی پرونده برقرار است." if visit.remote else "بازدید حضوری مطابق ITP ثبت شد."
-    submit_visit(session, visit.id, user, "accept", note)
+    submit_visit(
+        session,
+        visit.id,
+        user,
+        "accept",
+        note,
+        require_signature=False,
+        require_in_report=False,
+    )
 
 
 def _open_visit(session, point, coordinator, vendor, *, remote: bool) -> tuple[InspectionPoint, object, User]:
@@ -265,7 +273,15 @@ def seed_demo(session: Session) -> None:
             answers.append({"item_id": item["id"], "value": "pass", "note": ""})
     save_checklist(session, visit.id, user, answers)
     add_site_photos(session, visit.id, user, visit.arrive_lat, visit.arrive_lng)
-    submit_visit(session, visit.id, user, "reject", "عدم انطباق جوش؛ تعمیر و بازرسی مجدد لازم است.")
+    submit_visit(
+        session,
+        visit.id,
+        user,
+        "reject",
+        "عدم انطباق جوش؛ تعمیر و بازرسی مجدد لازم است.",
+        require_signature=False,
+        require_in_report=False,
+    )
 
     submitted.unit_manager_id = unit_manager.id
     _point, visit, user = _open_visit(session, submitted, coordinator, vendor, remote=False)

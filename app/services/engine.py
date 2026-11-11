@@ -1,5 +1,6 @@
 """حلقه عملیاتی اعزام: مدارک، پیشنهاد، حضور در کارگاه، IVR و عدم انطباق."""
 
+import json
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -986,9 +987,9 @@ def add_evidence(
         raise DomainError("not_on_site", "عکس فقط حین بازرسی ثبت می‌شود.", 409)
     if visit.arrive_lat is None or visit.arrive_lng is None or visit.arrived_at is None:
         raise DomainError("location_required", "برای پیوست مدرک، موقعیت جغرافیایی را فعال و تأیید کنید.", 409)
-    if kind not in PHOTO_KINDS:
+    if kind not in PHOTO_KINDS and kind != "inspector_signature":
         raise DomainError("bad_photo", "نوع عکس باید مورد بازرسی، محیط یا پیکان‌کار باشد.", 400)
-    text = caption.strip() or PHOTO_KINDS[kind]
+    text = caption.strip() or ("مهر و امضای بازرس" if kind == "inspector_signature" else PHOTO_KINDS[kind])
     row = Evidence(visit_id=visit.id, caption=text[:200], kind=kind, stored_name=stored_name, lat=lat, lng=lng)
     session.add(row)
     session.flush()
@@ -1002,7 +1003,16 @@ def add_site_photos(session: Session, visit_id: int, actor: User, lat: float | N
         add_evidence(session, visit_id, actor, PHOTO_KINDS[kind], lat, lng, kind=kind)
 
 
-def submit_visit(session: Session, visit_id: int, actor: User, result: str, note: str) -> Visit:
+def submit_visit(
+    session: Session,
+    visit_id: int,
+    actor: User,
+    result: str,
+    note: str,
+    *,
+    require_signature: bool = True,
+    require_in_report: bool = True,
+) -> Visit:
     visit = _visit(session, visit_id)
     _own_visit(session, visit, actor)
     point = _point(session, visit.point_id)
@@ -1012,6 +1022,13 @@ def submit_visit(session: Session, visit_id: int, actor: User, result: str, note
         raise DomainError("location_required", "برای ارسال گزارش، موقعیت جغرافیایی را فعال و تأیید کنید.", 409)
     if result not in {"accept", "reject"}:
         raise DomainError("bad_result", "نتیجه بازدید قبول یا رد است.", 400)
+    if require_in_report and point.request_form_id:
+        try:
+            report_form = json.loads(visit.report_form_json or "{}")
+        except json.JSONDecodeError:
+            report_form = {}
+        if not report_form.get("duration") or not report_form.get("observation"):
+            raise DomainError("in_report_incomplete", "ابتدا نسخهٔ گزارش فرم IN را با مدت و شرح بازرسی تکمیل و ذخیره کنید.", 409)
     answers = session.scalars(select(ChecklistAnswer).where(ChecklistAnswer.visit_id == visit.id)).all()
     by_id = {row.item_id: row for row in answers}
     for item in point.checklist:
@@ -1032,6 +1049,18 @@ def submit_visit(session: Session, visit_id: int, actor: User, result: str, note
         missing = [PHOTO_KINDS[kind] for kind in PHOTO_KINDS if kind not in present]
         if missing:
             raise DomainError("photo_required", "عکس‌های لازم با موبایل ثبت نشده: " + "، ".join(missing), 409)
+    if require_signature:
+        signature = session.scalar(
+            select(Evidence)
+            .where(
+                Evidence.visit_id == visit.id,
+                Evidence.kind == "inspector_signature",
+                Evidence.stored_name != "",
+            )
+            .order_by(Evidence.id.desc())
+        )
+        if signature is None or (visit.reviewed_at and signature.created_at <= visit.reviewed_at):
+            raise DomainError("signature_required", "برای ارسال گزارش، مهر و امضای تصویری بازرس را بارگذاری کنید.", 409)
     if visit.remote and len(note.strip()) < 10:
         raise DomainError("remote_note", "بازبینی از راه دور شرح حداقل ده‌حرفی می‌خواهد.", 400)
     point.status = move_point("on_site", "submitted")

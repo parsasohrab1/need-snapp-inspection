@@ -486,6 +486,9 @@ def manager_dashboard(session: Session, actor: User, kind: str | None = None) ->
             "tag": item.tag,
             "title": point.title,
             "request_status": point.request_status,
+            "request_note": point.request_note,
+            "department": point.request_department,
+            "unit_manager_id": point.unit_manager_id,
         })
 
     def inspection_row(point: InspectionPoint, visit: Visit | None = None) -> dict:
@@ -587,7 +590,8 @@ def manager_dashboard(session: Session, actor: User, kind: str | None = None) ->
 def unit_manager_dashboard(session: Session, actor: User) -> dict:
     if actor.role not in {"unit_manager", "admin"}:
         raise DomainError("forbidden", "این میز کار فقط برای مدیر واحد است.", 403)
-    points = [point for point in visible_points(session, actor) if point.request_status == "unit_review"]
+    assigned_points = visible_points(session, actor)
+    points = [point for point in assigned_points if point.request_status == "unit_review"]
     rows = []
     for point in points:
         item = session.get(Equipment, point.equipment_id)
@@ -605,8 +609,36 @@ def unit_manager_dashboard(session: Session, actor: User) -> dict:
             "request_note": point.request_note,
             "request_form_id": point.request_form_id,
         })
+    sent_points = [
+        point
+        for point in assigned_points
+        if point.request_status in {"inspection_queue", "approved_no_inspector"}
+    ]
+    dispatches = dispatch_for_points(session, sent_points)
+    sent_rows = []
+    for point in sent_points:
+        item = session.get(Equipment, point.equipment_id)
+        order = session.get(PurchaseOrder, item.po_id)
+        project = session.get(Project, order.project_id)
+        buyer = session.get(Company, project.buyer_company_id)
+        dispatch = dispatches.get(point.id, {})
+        sent_rows.append({
+            "point_id": point.id,
+            "tag": item.tag,
+            "project": project.name,
+            "buyer": buyer.name if buyer else "",
+            "title": point.title,
+            "department": point.request_department,
+            "request_status": point.request_status,
+            "request_note": point.request_note,
+            "request_form_id": point.request_form_id,
+            "dispatch_status": point.status,
+            "inspector": dispatch.get("inspector", ""),
+            "dispatch_sentence": dispatch.get("sentence", ""),
+            "offered": dispatch.get("offered", []),
+        })
     report_rows = _report_rows(session, actor, "submitted", "unit_review")
-    return {"requests": rows, "reports": report_rows}
+    return {"requests": rows, "sent_requests": sent_rows, "reports": report_rows}
 
 
 def request_comments(session: Session, point_id: int) -> list[dict]:
@@ -733,6 +765,19 @@ def _visit_brief(session: Session, visit: Visit) -> dict:
     }
 
 
+def _visit_signature_uploaded(session: Session, visit: Visit) -> bool:
+    signature = session.scalar(
+        select(Evidence)
+        .where(
+            Evidence.visit_id == visit.id,
+            Evidence.kind == "inspector_signature",
+            Evidence.stored_name != "",
+        )
+        .order_by(Evidence.id.desc())
+    )
+    return bool(signature and (visit.reviewed_at is None or signature.created_at > visit.reviewed_at))
+
+
 def visit_ivr(session: Session, visit_id: int, actor: User | None = None) -> dict:
     visit = session.get(Visit, visit_id)
     detail = point_detail(session, visit.point_id)
@@ -767,6 +812,8 @@ def visit_ivr(session: Session, visit_id: int, actor: User | None = None) -> dic
             "city": inspector.city,
             "certifications": inspector.certifications,
             "signature_verified": visit.phase in {"submitted", "client", "confirmed"} and visit.submitted_at is not None,
+            "signature_uploaded": _visit_signature_uploaded(session, visit),
+            "report_form_completed": bool(visit.report_form_json and visit.report_form_json != "{}"),
         },
         "context": detail,
         "answers": [{"item_id": row.item_id, "value": row.value, "note": row.note} for row in answers],
@@ -779,6 +826,7 @@ def visit_ivr(session: Session, visit_id: int, actor: User | None = None) -> dic
                 "media_type": row.media_type,
                 "lat": row.lat,
                 "lng": row.lng,
+                "created_at": row.created_at.isoformat(sep=" ", timespec="seconds"),
                 "url": f"/api/evidence/{row.id}/file" if row.stored_name else "",
             }
             for row in photos

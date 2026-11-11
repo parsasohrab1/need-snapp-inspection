@@ -90,7 +90,15 @@ def test_remote_report_evidence_requires_confirmed_geolocation():
         add_evidence(session, visit.id, user, "مدرک", None, None)
     assert caught.value.code == "location_required"
     with pytest.raises(DomainError) as caught:
-        submit_visit(session, visit.id, user, "accept", "گزارش بازرسی")
+        submit_visit(
+            session,
+            visit.id,
+            user,
+            "accept",
+            "گزارش بازرسی",
+            require_signature=False,
+            require_in_report=False,
+        )
     assert caught.value.code == "location_required"
 
     confirm_remote_location(session, visit.id, user, 35.755, 50.958)

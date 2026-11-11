@@ -30,6 +30,7 @@ from app.schemas import (
     ReadyIn,
     ReviewIn,
     SubmitIn,
+    VisitInReportFormIn,
     ReportCommentIn,
     RequestCommentIn,
     RequestReturnIn,
@@ -46,6 +47,7 @@ from app.services.files import (
     document_path,
     photo_path,
     request_signature_path,
+    sniff_image,
     store_request_signature,
     store_evidence_attachment,
     store_document,
@@ -473,8 +475,14 @@ async def upload_visit_attachment(
     filename = Path(file.filename or "").name
     if not filename:
         raise HTTPException(status_code=400, detail="نام فایل معتبر نیست")
+    max_bytes = MAX_REQUEST_SIGNATURE_BYTES if kind == "inspector_signature" else MAX_DOCUMENT_BYTES
+    raw = await file.read(max_bytes + 1)
+    if kind == "inspector_signature":
+        image_suffix = sniff_image(raw)
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp"} or (image_suffix != suffix and not (image_suffix == ".jpg" and suffix == ".jpeg")):
+            raise HTTPException(status_code=400, detail="مهر و امضای بازرس باید تصویر JPEG، PNG یا WebP باشد")
     row = engine.add_evidence(db, visit_id, actor, caption, lat, lng, kind=kind)
-    raw = await file.read(MAX_DOCUMENT_BYTES + 1)
     row.stored_name, row.media_type = store_evidence_attachment(raw, filename)
     row.filename = filename
     return {"id": row.id, "filename": row.filename, "media_type": row.media_type}
@@ -499,6 +507,25 @@ def evidence_file(evidence_id: int, actor: User = Depends(current_user), db: Ses
 def submit(visit_id: int, body: SubmitIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.submit_visit(db, visit_id, actor, body.result, body.note)
     return views.visit_ivr(db, visit_id, actor)
+
+
+@app.get("/api/visits/{visit_id}/in-report-form")
+def visit_in_report_form(visit_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
+    visit = db.get(Visit, visit_id)
+    if visit is None or not views.can_access_visit(db, actor, visit):
+        raise HTTPException(status_code=403, detail="به فرم گزارش این بازدید دسترسی ندارید")
+    return form_sheets.visit_report_form(db, actor, visit_id)
+
+
+@app.put("/api/visits/{visit_id}/in-report-form")
+def save_visit_in_report_form(
+    visit_id: int,
+    body: VisitInReportFormIn,
+    actor: User = Depends(current_user),
+    db: Session = Depends(db_of),
+):
+    form_sheets.save_visit_report_form(db, actor, visit_id, body.payload)
+    return form_sheets.visit_report_form(db, actor, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/review")

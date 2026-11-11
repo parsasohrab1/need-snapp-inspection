@@ -159,6 +159,7 @@ class Visit(Base):
     phase: Mapped[str] = mapped_column(String(20), default="assigned")
     report_stage: Mapped[str] = mapped_column(String(32), default="")
     review_note: Mapped[str] = mapped_column(Text, default="")
+    report_form_json: Mapped[str] = mapped_column(Text, default="{}")
     result: Mapped[str] = mapped_column(String(20), default="")
     note: Mapped[str] = mapped_column(Text, default="")
     ivr_no: Mapped[str] = mapped_column(String(40), default="")

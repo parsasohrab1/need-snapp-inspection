@@ -89,6 +89,8 @@ def init_db() -> None:
             conn.exec_driver_sql("ALTER TABLE visits ADD COLUMN report_stage VARCHAR(32) NOT NULL DEFAULT ''")
         if visit_names and "review_note" not in visit_names:
             conn.exec_driver_sql("ALTER TABLE visits ADD COLUMN review_note TEXT NOT NULL DEFAULT ''")
+        if visit_names and "report_form_json" not in visit_names:
+            conn.exec_driver_sql("ALTER TABLE visits ADD COLUMN report_form_json TEXT NOT NULL DEFAULT '{}'")
         if visit_names:
             conn.exec_driver_sql(
                 "UPDATE visits SET report_stage = CASE "

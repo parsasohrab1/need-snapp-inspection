@@ -16,6 +16,7 @@ from app.services.engine import (
     add_document,
     add_site_photos,
     broadcast,
+    confirm_by_client,
     confirm_remote_location,
     decline_offer,
     expire_offers,
@@ -53,6 +54,7 @@ def build_campaign(session: Session) -> dict:
     session.flush()
     buyer = _add_user(session, "lab.buyer", "کارفرما", "buyer", buyer_co.id)
     manager = _add_user(session, "lab.manager", "مدیر پروژه", "manager", buyer_co.id)
+    unit_manager = _add_user(session, "lab.unit.manager", "مدیر واحد", "unit_manager")
     vendor = _add_user(session, "lab.vendor", "سازنده", "vendor", vendor_co.id)
     coordinator = _add_user(session, "lab.coordinator", "هماهنگ‌کننده", "coordinator")
     roster = [
@@ -136,10 +138,13 @@ def build_campaign(session: Session) -> dict:
     point_ids = list(session.scalars(select(InspectionPoint.id).order_by(InspectionPoint.id)).all())
     if len(point_ids) != 40:
         raise RuntimeError(f"expected 40 points, got {len(point_ids)}")
+    for point_id in point_ids:
+        session.get(InspectionPoint, point_id).unit_manager_id = unit_manager.id
     return {
         "vendor": vendor,
         "buyer": buyer,
         "manager": manager,
+        "unit_manager": unit_manager,
         "coordinator": coordinator,
         "far_inspector_id": far_id,
         "point_ids": point_ids,
@@ -163,15 +168,17 @@ def _complete(session, point, visit, user: User, *, fail: bool) -> str:
         add_site_photos(session, visit.id, user, WORKSHOP[0], WORKSHOP[1])
     result = "reject" if fail else "accept"
     note = "شرح بازبینی مدارک از راه دور برای این نقطه ثبت شد." if visit.remote else "نتیجه بازدید کارگاهی ثبت شد."
-    submit_visit(session, visit.id, user, result, note)
+    submit_visit(session, visit.id, user, result, note, require_signature=False, require_in_report=False)
     return result
 
 
 def run_campaign(session: Session) -> dict:
     world = build_campaign(session)
     coordinator = world["coordinator"]
+    buyer = world["buyer"]
     vendor = world["vendor"]
     manager = world["manager"]
+    unit_manager = world["unit_manager"]
     far_id = world["far_inspector_id"]
     points = [session.get(InspectionPoint, pid) for pid in world["point_ids"]]
 
@@ -242,22 +249,17 @@ def run_campaign(session: Session) -> dict:
         fail = point.discipline in fail_once and point.discipline not in failed_done and point.point_type == "H"
         result = _complete(session, point, visit, user, fail=fail)
         if result == "reject":
-            review_visit(session, visit.id, coordinator, "confirm_ncr")
+            review_visit(session, visit.id, unit_manager, "return", "بازرس باید ایراد ثبت‌شده را اصلاح کند")
             failed_done.add(point.discipline)
             ncr_count += 1
-            mark_ready(session, point.id, vendor, remote_requested=False)
-            retry = broadcast(session, point.id, coordinator, ttl_seconds=600)
-            if any(item.inspector_id == far_id for item in retry) and not point.remote_requested:
-                site_offers_to_far += 1
-            visit = accept_offer(session, retry[0].id, _user_of(session, retry[0].inspector_id))
-            user = _user_of(session, retry[0].inspector_id)
-            mark_en_route(session, visit.id, user)
-            equipment = session.get(Equipment, point.equipment_id)
-            mark_arrived(session, visit.id, user, equipment.lat, equipment.lng)
             _complete(session, point, visit, user, fail=False)
+            review_visit(session, visit.id, unit_manager, "approve")
             review_visit(session, visit.id, manager, "approve")
+            confirm_by_client(session, visit.id, buyer)
         else:
+            review_visit(session, visit.id, unit_manager, "approve")
             review_visit(session, visit.id, manager, "approve")
+            confirm_by_client(session, visit.id, buyer)
 
     accepted = session.scalar(select(func.count(InspectionPoint.id)).where(InspectionPoint.status == "accepted"))
     ledgers = session.scalars(select(Ledger)).all()

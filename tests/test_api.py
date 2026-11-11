@@ -313,10 +313,17 @@ def test_mobile_photos_of_item_place_and_marker():
             files={"file": ("inspection.mp4", b"\x00\x00\x00\x18ftypisom", "video/mp4")},
         )
         assert video.status_code == 200
+        signature = client.post(
+            f"/api/visits/{visit_id}/attachments",
+            data={"kind": "inspector_signature", "caption": "مهر و امضای بازرس"},
+            files={"file": ("inspector-signature.png", png, "image/png")},
+        )
+        assert signature.status_code == 200
         sent = client.post(f"/api/visits/{visit_id}/submit", json={"result": "accept", "note": "بازدید حضوری ثبت شد."})
         assert sent.status_code == 200
         report = client.get(f"/api/visits/{visit_id}/ivr").json()
-        assert {row["kind"] for row in report["photos"]} == {"item", "environment", "marker"}
+        assert report["visit"]["signature_uploaded"] is True
+        assert {row["kind"] for row in report["photos"]} == {"item", "environment", "marker", "inspector_signature"}
         video_row = next(row for row in report["photos"] if row["filename"] == "inspection.mp4")
         downloaded_video = client.get(video_row["url"])
         assert downloaded_video.status_code == 200
@@ -475,6 +482,12 @@ def test_unit_manager_returns_report_to_inspector_for_revision():
             f"/api/visits/{report['visit_id']}/checklist",
             json={"answers": answers},
         ).status_code == 200
+        signature = client.post(
+            f"/api/visits/{report['visit_id']}/attachments",
+            data={"kind": "inspector_signature", "caption": "امضای بازرس برای ارسال مجدد"},
+            files={"file": ("inspector-signature.png", TEST_SIGNATURE_PNG, "image/png")},
+        )
+        assert signature.status_code == 200
         resubmitted = client.post(
             f"/api/visits/{report['visit_id']}/submit",
             json={"result": "accept", "note": "موارد اصلاح شد و بازرسی دوباره انجام شد"},
@@ -523,6 +536,8 @@ def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp
             client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
             manager_desk = client.get("/api/manager/desk").json()
             assert any(row["form_id"] == form_id for row in manager_desk["in_forms"])
+            received_form = next(row for row in manager_desk["in_forms"] if row["form_id"] == form_id)
+            assert received_form["request_status"] == "manager_review"
             viewed_in = client.get(f"/api/forms/{form_id}")
             assert viewed_in.status_code == 200
             assert viewed_in.json()["payload"]["number"] == "IN-TEST-1"
@@ -542,8 +557,13 @@ def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp
             )
             assert manager_approved.status_code == 200
             assert manager_approved.json()["request_status"] == "unit_review"
+            manager_sent = client.get("/api/manager/desk").json()["in_forms"]
+            sent_form = next(row for row in manager_sent if row["form_id"] == form_id)
+            assert sent_form["request_status"] == "unit_review"
 
             client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+            unit_desk = client.get("/api/unit-manager/desk").json()
+            assert any(row["point_id"] == point["id"] for row in unit_desk["requests"])
             detail = client.get(f"/api/points/{point['id']}").json()
             approvals = detail["point"]["request_approvals"]
             assert len(approvals) == 1
@@ -558,9 +578,93 @@ def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp
             )
             assert unit_approved.status_code == 200
             assert unit_approved.json()["request_status"] in {"inspection_queue", "approved_no_inspector"}
+            unit_sent = client.get("/api/unit-manager/desk").json()["sent_requests"]
+            sent_request = next(row for row in unit_sent if row["point_id"] == point["id"])
+            assert sent_request["request_status"] == unit_approved.json()["request_status"]
+            assert sent_request["request_form_id"] == form_id
             approvals = client.get(f"/api/points/{point['id']}").json()["point"]["request_approvals"]
             assert [approval["stage"] for approval in approvals] == ["manager", "unit_manager"]
             assert client.get(f"/api/points/{point['id']}").json()["point"]["request_form_id"] == form_id
+
+            inspector_accounts = (
+                "inspector.reza",
+                "inspector.maryam",
+                "inspector.hossein",
+                "inspector.sara",
+                "inspector.kaveh",
+                "inspector.elham",
+                "inspector.payam",
+                "inspector.nima",
+            )
+            assigned_inspector = None
+            for username in inspector_accounts:
+                client.post("/api/auth/login", json={"username": username, "password": "demo1234"})
+                matching_offer = next(
+                    (
+                        offer for offer in client.get("/api/offers/inbox").json()
+                        if offer["point"]["id"] == point["id"]
+                    ),
+                    None,
+                )
+                if matching_offer:
+                    accepted = client.post(f"/api/offers/{matching_offer['offer']['id']}/accept")
+                    assert accepted.status_code == 200
+                    assigned_inspector = username
+                    break
+            assert assigned_inspector is not None
+            active = client.get("/api/visits/active").json()
+            assert active["context"]["point"]["request_form_id"] == form_id
+            assert active["visit"]["signature_uploaded"] is False
+            inspector_form = client.get(f"/api/forms/{form_id}")
+            assert inspector_form.status_code == 200
+            assert inspector_form.json()["payload"]["number"] == "IN-TEST-1"
+            original_payload = inspector_form.json()["payload"]
+            unauthorized_inspector = next(username for username in inspector_accounts if username != assigned_inspector)
+            client.post("/api/auth/login", json={"username": unauthorized_inspector, "password": "demo1234"})
+            assert client.get(f"/api/forms/{form_id}").status_code == 403
+            assert client.get(f"/api/visits/{active['visit']['id']}/in-report-form").status_code == 403
+
+            client.post("/api/auth/login", json={"username": assigned_inspector, "password": "demo1234"})
+            report_form_url = f"/api/visits/{active['visit']['id']}/in-report-form"
+            report_form = client.get(report_form_url)
+            assert report_form.status_code == 200
+            assert report_form.json()["can_edit"] is True
+            assert report_form.json()["payload"]["number"] == original_payload["number"]
+            incomplete_payload = dict(report_form.json()["payload"], duration="", observation="")
+            incomplete = client.put(report_form_url, json={"payload": incomplete_payload})
+            assert incomplete.status_code == 400
+            assert incomplete.json()["error"] == "required_field"
+
+            visit_id = active["visit"]["id"]
+            assert client.post(f"/api/visits/{visit_id}/en-route").status_code == 200
+            location = {
+                "lat": active["context"]["equipment"]["lat"],
+                "lng": active["context"]["equipment"]["lng"],
+            }
+            assert client.post(f"/api/visits/{visit_id}/arrive", json=location).status_code == 200
+            incomplete_report = client.post(
+                f"/api/visits/{visit_id}/submit",
+                json={"result": "accept", "note": "گزارش بازرسی کامل است"},
+            )
+            assert incomplete_report.status_code == 409
+            assert incomplete_report.json()["error"] == "in_report_incomplete"
+
+            completed_payload = dict(
+                report_form.json()["payload"],
+                duration="یک ساعت",
+                observation="بازرسی انجام شد و نتیجه ثبت گردید.",
+            )
+            saved_report_form = client.put(report_form_url, json={"payload": completed_payload})
+            assert saved_report_form.status_code == 200
+            assert saved_report_form.json()["completed"] is True
+            assert saved_report_form.json()["payload"]["observation"] == completed_payload["observation"]
+            assert client.get(f"/api/forms/{form_id}").json()["payload"] == original_payload
+
+            client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
+            manager_report_form = client.get(report_form_url)
+            assert manager_report_form.status_code == 200
+            assert manager_report_form.json()["can_edit"] is False
+            assert manager_report_form.json()["payload"]["observation"] == completed_payload["observation"]
     finally:
         reset_engine()
 
