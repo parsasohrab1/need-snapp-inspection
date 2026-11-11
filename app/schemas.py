@@ -88,6 +88,7 @@ class SubmitIn(BaseModel):
 
 class ReviewIn(BaseModel):
     decision: str
+    note: str = ""
 
 
 class DocumentIn(BaseModel):

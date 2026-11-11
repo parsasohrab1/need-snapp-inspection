@@ -6,8 +6,11 @@ from app.domain.errors import DomainError
 
 EVIDENCE_DIR = Path("data/evidence")
 DOCUMENT_DIR = Path("data/documents")
+REQUEST_SIGNATURE_DIR = Path("data/request-signatures")
 MAX_BYTES = 8_000_000
+MAX_REQUEST_SIGNATURE_BYTES = 8_000_000
 MAX_DOCUMENT_BYTES = 100_000_000
+REQUEST_SIGNATURE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 DOCUMENT_EXTENSIONS = {
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
     ".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".webm",
@@ -44,6 +47,16 @@ def photo_path(stored_name: str) -> Path:
 def store_document(raw: bytes, filename: str) -> str:
     suffix, _media_type = validate_attachment(raw, filename)
     return _store(raw, suffix, DOCUMENT_DIR)
+
+
+def store_request_signature(raw: bytes, filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix not in REQUEST_SIGNATURE_EXTENSIONS or len(raw) > MAX_REQUEST_SIGNATURE_BYTES:
+        raise DomainError("bad_signature", "مهر و امضا باید تصویر JPEG، PNG یا WebP حداکثر ۸ مگابایتی باشد.", 400)
+    validated_suffix, _media_type = validate_attachment(raw, filename)
+    if validated_suffix != suffix:
+        raise DomainError("bad_signature", "محتوای تصویر مهر و امضا معتبر نیست.", 400)
+    return _store(raw, suffix, REQUEST_SIGNATURE_DIR)
 
 
 def store_evidence_attachment(raw: bytes, filename: str) -> tuple[str, str]:
@@ -96,6 +109,12 @@ def document_path(stored_name: str) -> Path:
     if not stored_name or "/" in stored_name or "\\" in stored_name or stored_name != Path(stored_name).name:
         raise DomainError("not_found", "سند پیدا نشد.", 404)
     return DOCUMENT_DIR / stored_name
+
+
+def request_signature_path(stored_name: str) -> Path:
+    if not stored_name or "/" in stored_name or "\\" in stored_name or stored_name != Path(stored_name).name:
+        raise DomainError("not_found", "تصویر مهر و امضا پیدا نشد.", 404)
+    return REQUEST_SIGNATURE_DIR / stored_name
 
 
 def document_media_type(filename: str) -> str:

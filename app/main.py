@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app import __version__
 from app.db import get_engine, init_db, open_session
 from app.domain.errors import DomainError
-from app.models import Document, Evidence, InspectionPoint, Mom, Project, User, Visit
+from app.models import Document, Evidence, InspectionPoint, InspectionRequestApproval, Mom, Project, User, Visit
 from app.services import forms as form_sheets
 from app.schemas import (
     AccountingStatusIn,
@@ -41,9 +41,12 @@ from app.seed import ensure_case_demo, ensure_engagement, ensure_project_manager
 from app.services import engine
 from app.services.files import (
     MAX_DOCUMENT_BYTES,
+    MAX_REQUEST_SIGNATURE_BYTES,
     document_media_type,
     document_path,
     photo_path,
+    request_signature_path,
+    store_request_signature,
     store_evidence_attachment,
     store_document,
     store_photo,
@@ -169,7 +172,7 @@ def unit_manager_dashboard(actor: User = Depends(current_user), db: Session = De
 
 @app.get("/api/unit-managers")
 def unit_managers(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "executive_manager", "admin"}:
+    if actor.role not in {"manager", "admin"}:
         raise DomainError("forbidden", "فقط مدیران می‌توانند مدیر واحد را انتخاب کنند.", 403)
     return [{"id": user.id, "name": user.name} for user in db.scalars(select(User).where(User.role == "unit_manager").order_by(User.name)).all()]
 
@@ -186,17 +189,35 @@ def point_detail(point_id: int, actor: User = Depends(current_user), db: Session
         raise HTTPException(status_code=404, detail="پیدا نشد")
     if point not in views.visible_points(db, actor):
         raise HTTPException(status_code=403, detail="به این بازرسی دسترسی ندارید")
-    detail = views.point_detail(db, point_id)
+    detail = views.point_detail(db, point_id, actor)
     if actor.role in {"buyer", "vendor"}:
         detail["selection"] = {}
         detail["offers"] = []
     return detail
 
 
+@app.get("/api/request-approvals/{approval_id}/signature")
+def request_approval_signature(
+    approval_id: int,
+    actor: User = Depends(current_user),
+    db: Session = Depends(db_of),
+):
+    approval = db.get(InspectionRequestApproval, approval_id)
+    if approval is None or not approval.signature_stored_name:
+        raise HTTPException(status_code=404, detail="تصویر مهر و امضا پیدا نشد")
+    point = db.get(InspectionPoint, approval.point_id)
+    if point is None or point not in views.visible_points(db, actor):
+        raise HTTPException(status_code=403, detail="به این مهر و امضا دسترسی ندارید")
+    path = request_signature_path(approval.signature_stored_name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="تصویر مهر و امضا پیدا نشد")
+    return FileResponse(path, media_type=document_media_type(approval.signature_filename))
+
+
 @app.post("/api/points/{point_id}/ready")
 def ready(point_id: int, body: ReadyIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.mark_ready(db, point_id, actor, remote_requested=body.remote_requested, window_note=body.window_note)
-    return views.point_detail(db, point_id)
+    return views.point_detail(db, point_id, actor)
 
 
 @app.post("/api/points/{point_id}/request")
@@ -224,31 +245,66 @@ def request_inspection(
 
 
 @app.post("/api/points/{point_id}/manager-approval")
-def manager_approval(
+async def manager_approval(
     point_id: int,
-    body: ApprovalNoteIn,
+    unit_manager_id: int = Form(...),
+    department: str = Form(...),
+    note: str = Form(""),
+    file: UploadFile = File(...),
     actor: User = Depends(current_user),
     db: Session = Depends(db_of),
 ):
-    point = engine.approve_inspection_as_manager(
-        db,
-        point_id,
-        actor,
-        body.note,
-        unit_manager_id=body.unit_manager_id,
-        department=body.department,
-    )
+    filename = Path(file.filename or "").name
+    if not filename:
+        raise HTTPException(status_code=400, detail="نام فایل مهر و امضا معتبر نیست")
+    raw = await file.read(MAX_REQUEST_SIGNATURE_BYTES + 1)
+    stored_name = store_request_signature(raw, filename)
+    try:
+        point = engine.approve_inspection_as_manager(
+            db,
+            point_id,
+            actor,
+            unit_manager_id=unit_manager_id,
+            department=department,
+            signature_stored_name=stored_name,
+            signature_filename=filename,
+            note=note,
+        )
+    except DomainError:
+        request_signature_path(stored_name).unlink(missing_ok=True)
+        raise
+    if point.request_status != "unit_review":
+        request_signature_path(stored_name).unlink(missing_ok=True)
     return {"request_status": point.request_status, "message": point.request_note}
 
 
 @app.post("/api/points/{point_id}/unit-approval")
-def unit_approval(
+async def unit_approval(
     point_id: int,
-    body: ApprovalNoteIn,
+    note: str = Form(""),
+    file: UploadFile = File(...),
     actor: User = Depends(current_user),
     db: Session = Depends(db_of),
 ):
-    point, offers = engine.approve_inspection_as_unit_manager(db, point_id, actor, body.note)
+    filename = Path(file.filename or "").name
+    if not filename:
+        raise HTTPException(status_code=400, detail="نام فایل مهر و امضا معتبر نیست")
+    raw = await file.read(MAX_REQUEST_SIGNATURE_BYTES + 1)
+    stored_name = store_request_signature(raw, filename)
+    try:
+        point, offers = engine.approve_inspection_as_unit_manager(
+            db,
+            point_id,
+            actor,
+            signature_stored_name=stored_name,
+            signature_filename=filename,
+            note=note,
+        )
+    except DomainError:
+        request_signature_path(stored_name).unlink(missing_ok=True)
+        raise
+    if point.request_status not in {"inspection_queue", "approved_no_inspector"}:
+        request_signature_path(stored_name).unlink(missing_ok=True)
     return {"request_status": point.request_status, "message": point.request_note, "offers": len(offers)}
 
 
@@ -274,31 +330,16 @@ def request_comment(
     return {"id": comment.id, "author": actor.name, "body": comment.body}
 
 
-@app.post("/api/points/{point_id}/executive-approval")
-def executive_approval(
-    point_id: int,
-    body: ApprovalNoteIn,
-    actor: User = Depends(current_user),
-    db: Session = Depends(db_of),
-):
-    point, offers = engine.approve_inspection_as_executive(db, point_id, actor, body.note)
-    return {
-        "request_status": point.request_status,
-        "message": point.request_note,
-        "offers": len(offers),
-    }
-
-
 @app.post("/api/points/{point_id}/broadcast")
 def broadcast(point_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.broadcast(db, point_id, actor)
-    return views.point_detail(db, point_id)
+    return views.point_detail(db, point_id, actor)
 
 
 @app.post("/api/points/{point_id}/force")
 def force(point_id: int, body: ForceIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.force_assign(db, point_id, body.inspector_id, actor, body.reason)
-    return views.point_detail(db, point_id)
+    return views.point_detail(db, point_id, actor)
 
 
 @app.get("/api/offers/inbox")
@@ -331,31 +372,31 @@ def active_visit(actor: User = Depends(current_user), db: Session = Depends(db_o
 @app.post("/api/visits/{visit_id}/en-route")
 def en_route(visit_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.mark_en_route(db, visit_id, actor)
-    return views.visit_ivr(db, visit_id)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/arrive")
 def arrive(visit_id: int, body: ArriveIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.mark_arrived(db, visit_id, actor, body.lat, body.lng)
-    return views.visit_ivr(db, visit_id)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/remote")
 def remote(visit_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.start_remote(db, visit_id, actor)
-    return views.visit_ivr(db, visit_id)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/location")
 def confirm_location(visit_id: int, body: LocationIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.confirm_remote_location(db, visit_id, actor, body.lat, body.lng)
-    return views.visit_ivr(db, visit_id)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/checklist")
 def checklist(visit_id: int, body: ChecklistIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.save_checklist(db, visit_id, actor, [item.model_dump() for item in body.answers])
-    return views.visit_ivr(db, visit_id)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/evidence")
@@ -422,19 +463,19 @@ def evidence_file(evidence_id: int, actor: User = Depends(current_user), db: Ses
 @app.post("/api/visits/{visit_id}/submit")
 def submit(visit_id: int, body: SubmitIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.submit_visit(db, visit_id, actor, body.result, body.note)
-    return views.visit_ivr(db, visit_id)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/review")
 def review(visit_id: int, body: ReviewIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    engine.review_visit(db, visit_id, actor, body.decision)
-    return views.visit_ivr(db, visit_id)
+    engine.review_visit(db, visit_id, actor, body.decision, body.note)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/confirm")
 def confirm(visit_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.confirm_by_client(db, visit_id, actor)
-    return views.visit_ivr(db, visit_id)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/client-reject")
@@ -455,7 +496,7 @@ def ivr(visit_id: int, actor: User = Depends(current_user), db: Session = Depend
         raise HTTPException(status_code=404, detail="پیدا نشد")
     if not views.can_access_visit(db, actor, visit):
         raise HTTPException(status_code=403, detail="به این گزارش دسترسی ندارید")
-    return views.visit_ivr(db, visit_id)
+    return views.visit_ivr(db, visit_id, actor)
 
 
 @app.post("/api/visits/{visit_id}/comments")
@@ -477,14 +518,14 @@ def report_comment(
 
 @app.get("/api/map")
 def map_data(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "دسترسی نقشه بازرسان برای این نقش فعال نیست.", 403)
     return views.map_payload(db)
 
 
 @app.get("/api/inspectors")
 def inspectors(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "فهرست بازرسان برای این نقش فعال نیست.", 403)
     return views.inspectors_public(db)
 
@@ -597,6 +638,11 @@ def report_inbox(actor: User = Depends(current_user), db: Session = Depends(db_o
     return views.manager_inbox(db, actor)
 
 
+@app.get("/api/reports/unit")
+def unit_report_inbox(actor: User = Depends(current_user), db: Session = Depends(db_of)):
+    return views.unit_report_inbox(db, actor)
+
+
 @app.get("/api/reports/client")
 def client_reports(actor: User = Depends(current_user), db: Session = Depends(db_of)):
     return views.client_inbox(db, actor)
@@ -651,13 +697,13 @@ def ledger(actor: User = Depends(current_user), db: Session = Depends(db_of)):
 
 @app.get("/api/benchmark")
 def benchmark(actor: User = Depends(current_user)):
-    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "بنچ‌مارک برای این نقش فعال نیست.", 403)
     return benchmark_payload()
 
 
 @app.get("/api/technology")
 def technology(actor: User = Depends(current_user)):
-    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "این بخش برای این نقش فعال نیست.", 403)
     return technology_payload()

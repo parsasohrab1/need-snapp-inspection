@@ -13,7 +13,7 @@ POINT_TRANSITIONS: dict[str, set[str]] = {
     "en_route": {"on_site"},
     "on_site": {"submitted"},
     "submitted": {"accepted", "ready"},
-    "accepted": {"ready"},
+    "accepted": {"ready", "submitted"},
 }
 
 TERMINAL_POINT = {"accepted"}

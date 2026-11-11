@@ -13,7 +13,8 @@ const STATUS = {
   assigned: "پذیرفته‌شده",
   en_route: "در مسیر",
   on_site: "در محل",
-  submitted: "در انتظار بررسی هماهنگ‌کننده",
+  submitted: "در انتظار بررسی مدیر پروژه",
+  unit_review: "در انتظار تأیید مدیر واحد",
   accepted: "تأیید شده",
 };
 
@@ -21,7 +22,6 @@ const ROLE_LABEL = {
   admin: "مدیر سامانه",
   coordinator: "هماهنگ‌کننده اعزام",
   manager: "مدیر پروژه",
-  executive_manager: "مدیر اجرایی",
   unit_manager: "مدیر واحد",
   buyer: "کارفرما",
   vendor: "سازنده",
@@ -29,7 +29,29 @@ const ROLE_LABEL = {
 };
 
 const app = document.querySelector("#app");
-const state = { me: null, view: "desk", toast: "", pointId: null, draft: {}, caption: "شاهد کارگاهی", kind: "project", formKind: "ivr", formId: null, formSpec: null, requestPointId: null, requestPrefill: null, managerTab: "overview", deskTimer: 0 };
+const state = { me: null, view: "desk", viewHistory: [], formReturnView: "desk", inRequestMode: false, buyerRequestPanels: [false, false], toast: "", pointId: null, draft: {}, caption: "شاهد کارگاهی", kind: "project", formKind: "ivr", formId: null, formSpec: null, requestPointId: null, requestPrefill: null, formDraft: null, managerTab: "overview", deskTimer: 0 };
+
+function navigateTo(view) {
+  if (state.view === view) return;
+  state.viewHistory.push(state.view);
+  state.view = view;
+}
+
+function resetFormState() {
+  state.inRequestMode = false;
+  state.formId = null;
+  state.formDraft = null;
+  state.requestPointId = null;
+  state.requestPrefill = null;
+}
+
+function goBack() {
+  const rootView = state.me?.role === "inspector" ? "dispatch" : "desk";
+  const previousView = state.viewHistory.pop()
+    || (state.view === "forms" ? state.formReturnView : rootView);
+  if (state.view === "forms") resetFormState();
+  state.view = previousView === state.view ? rootView : previousView;
+}
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -161,6 +183,7 @@ function localizeInSheet(sheet) {
 async function boot() {
   try {
     state.me = await api("/api/me");
+    state.viewHistory = [];
     if (state.me.role === "inspector") state.view = "dispatch";
   } catch {
     state.me = null;
@@ -192,7 +215,7 @@ function shell(title, subtitle, body) {
       if (!vendorItems.has(visibleItems[index][0])) visibleItems.splice(index, 1);
     }
   }
-  if (!["admin", "coordinator", "manager", "executive_manager"].includes(state.me.role)) {
+  if (!["admin", "coordinator", "manager"].includes(state.me.role)) {
     const registration = visibleItems.findIndex(([id]) => id === "registration");
     if (registration >= 0) visibleItems.splice(registration, 1);
   }
@@ -207,7 +230,12 @@ function shell(title, subtitle, body) {
         <button class="navbtn" data-act="logout">خروج</button>
       </aside>
       <section class="main ${state.view === "dispatch" ? "ride-main" : ""}">
-        <div class="top"><div><h1>${title}</h1><p>${subtitle}</p></div></div>
+        <div class="top">
+          <div class="top-heading">
+            <button class="back-button" data-act="back" aria-label="بازگشت به صفحه قبل" title="بازگشت به صفحه قبل" ${!state.viewHistory.length && state.view === (state.me.role === "inspector" ? "dispatch" : "desk") ? "disabled" : ""}><span aria-hidden="true">←</span><span>بازگشت</span></button>
+            <div><h1>${title}</h1><p>${subtitle}</p></div>
+          </div>
+        </div>
         ${body}
       </section>
     </div>
@@ -219,7 +247,6 @@ function login() {
     ["buyer", "کارفرما", "ثبت فرم IN و پیگیری درخواست بازرسی"],
     ["manager", "مدیر پروژه", "بررسی درخواست کارفرما و ارجاع به مدیر واحد"],
     ["unit.manager", "مدیر واحد", "تأیید تخصصی و ارسال پیشنهاد برای بازرس"],
-    ["executive", "مدیر اجرایی", "تأیید نهایی و دسترسی کامل به فرم‌ها"],
     ["coordinator", "هماهنگ‌کننده اعزام", "پیگیری اعزام و گزارش‌های بازرسی"],
     ["inspector.reza", "بازرس جوش", "پذیرش پیشنهاد، حضور در کارگاه، IVR"],
     ["vendor", "سازنده", "بارگذاری مدارک و اعلام آمادگی"],
@@ -239,7 +266,7 @@ function login() {
         </div>
       </section>
       <section class="panel">
-        <h2>ورود به طرح فلامینگو</h2>
+        <h2>ورود به سامانه اسنپ‌بازرس</h2>
         <p class="hint">محیط اعتبارسنجی با کارگاه ماشین‌سازی البرز در کرج، هشت بازرس و چهل نقطه بازرسی.</p>
         <div class="roles">
           ${roles.map(([user, name, text]) => `<button class="role" data-act="login" data-user="${user}"><b>${name}</b><small>${text}</small></button>`).join("")}
@@ -313,21 +340,17 @@ function reportCard(row, actions) {
       <button class="linkish" data-act="open-ivr" data-id="${row.visit_id}">
         <b>${esc(row.ivr_no)} · ${row.result === "reject" ? "رد" : "قبول"}</b>
         <small>${esc(row.tag)} · ${esc(row.title)} · ${esc(row.inspector)}</small>
-        <em>${esc(row.defects[0] || row.note || "بدون ایراد")}</em>
+        <em>${esc(row.client_rejection_note || row.defects[0] || row.note || "بدون ایراد")}</em>
       </button>
       ${actions || ""}
     </article>`;
 }
 
 function managerTray(reports) {
-  const cards = (reports || []).map((row) => reportCard(row, `
-    <div class="actions">
-      ${row.result === "accept" ? `<button class="primary" data-act="review" data-id="${row.visit_id}" data-decision="approve">تأیید</button>` : ""}
-      <button class="warn" data-act="review" data-id="${row.visit_id}" data-decision="return">برگرداندن</button>
-    </div>`)).join("");
+  const cards = (reports || []).map((row) => reportCard(row, "")).join("");
   return `<section class="card pad tray">
-    <h3>کارتابل هماهنگ‌کننده / مدیر پروژه</h3>
-    <p class="hint">گزارش بازرس همان لحظهٔ ثبت اینجا می‌نشیند. مغایرت برمی‌گردد و تأیید وارد کارتابل کارفرما می‌شود.</p>
+    <h3>کارتابل مدیر پروژه</h3>
+    <p class="hint">گزارش پس از ثبت در کارتابل مدیر پروژه قرار می‌گیرد و برای تصمیم نهایی باید وارد فرم گزارش شوید.</p>
     <div class="picked-list">${cards || `<p class="empty">گزارش تازه‌ای ننشسته است.</p>`}</div>
   </section>`;
 }
@@ -383,7 +406,7 @@ function billBoard(bills) {
       </div>
       ${bill.claim_note ? `<p class="hint">یادداشت Claim: ${esc(bill.claim_note)}</p>` : ""}
       <p class="hint">${esc(bill.basis)}</p>
-      ${["manager", "executive_manager", "admin"].includes(state.me.role) ? `
+      ${["manager", "admin"].includes(state.me.role) ? `
         <div class="archive-upload">
           <label>وضعیت صورت‌وضعیت
             <select id="bill-status-${bill.id}">
@@ -490,18 +513,68 @@ function managerDispatchList(rows) {
 }
 
 function buyerRequestTray(board) {
-  const requests = board.filter((row) =>
+  const eligible = board.filter((row) =>
     ["draft", "documents_missing", "returned"].includes(row.request_status)
   );
+  const requests = board.filter((row) => row.request_status !== "draft");
+  const requestStatus = {
+    documents_missing: "نقص مدارک",
+    manager_review: "در انتظار بررسی مدیر پروژه",
+    unit_review: "در انتظار بررسی مدیر واحد",
+    inspection_queue: "در کارتابل بازرسی",
+    approved: "تأیید و ارسال به بازرس",
+    approved_no_inspector: "تأییدشده؛ در انتظار بازرس",
+    returned: "مرجوع‌شده؛ نیازمند اصلاح",
+  };
   return `<section class="card pad">
-    <h3>ثبت درخواست بازرسی IN</h3>
-    <p class="hint">برای شروع، نقطه بازرسی را انتخاب و فرم IN را تکمیل کنید. درخواست به کارتابل مدیر پروژه ارسال می‌شود.</p>
-    <div class="picked-list">${requests.map((row) => `
-      <div class="person">
-        <span>${esc(row.tag)} · ${esc(row.title)}<small>${esc(row.project_name)} · ${esc(row.request_status === "draft" ? "آماده ثبت درخواست" : row.request_status === "returned" ? "مرجوع‌شده؛ نیازمند اصلاح" : "نیازمند تکمیل مدارک")}</small></span>
-        <button class="primary" data-act="open-request-form" data-id="${row.id}">ثبت فرم IN</button>
-      </div>`).join("") || `<p class="empty">درخواستی برای ثبت موجود نیست؛ همه نقاط در حال بررسی یا تأیید هستند.</p>`}</div>
+    <h3>درخواست‌های بازرسی کارفرما</h3>
+    <p class="hint">درخواست‌های ثبت‌شده را باز کنید یا برای یک نقطهٔ آماده، IN جدید بسازید.</p>
+    <div class="buyer-request-panels">
+      <details class="buyer-request-box" ${state.buyerRequestPanels[0] ? "open" : ""}>
+        <summary><span>درخواست‌های ثبت‌شده</span><span class="chip">${requests.length.toLocaleString("fa-IR")}</span></summary>
+        <div class="buyer-request-list">${requests.map((row) => `
+          <div class="person">
+            <span>${esc(row.tag)} · ${esc(row.title)}<small>${esc(row.project_name)} · ${esc(requestStatus[row.request_status] || row.request_status)}</small></span>
+            <button class="ghost" data-act="open-point" data-id="${row.id}">مشاهده درخواست</button>
+          </div>`).join("") || `<p class="empty">هنوز درخواستی ثبت نشده است.</p>`}</div>
+      </details>
+      <details class="buyer-request-box" ${state.buyerRequestPanels[1] ? "open" : ""}>
+        <summary><span>ثبت IN جدید</span><span class="chip">${eligible.length.toLocaleString("fa-IR")}</span></summary>
+        <div class="buyer-request-list">
+          <p>همهٔ نقاط قابل درخواست از داخل یک فرم انتخاب می‌شوند.</p>
+          <button class="primary" data-act="begin-in-request" ${eligible.length ? "" : "disabled"}>ایجاد درخواست IN جدید</button>
+        </div>
+      </details>
+    </div>
   </section>`;
+}
+
+function inRequestPointChooser(board, selectedId) {
+  const eligible = board.filter((row) =>
+    ["draft", "documents_missing", "returned"].includes(row.request_status)
+  );
+  const grouped = new Map();
+  eligible.forEach((row) => {
+    const points = grouped.get(row.tag) || [];
+    points.push(row);
+    grouped.set(row.tag, points);
+  });
+  const selected = eligible.find((row) => row.id === selectedId);
+  return `<details class="in-point-chooser" ${selected ? "" : "open"}>
+    <summary>${selected
+      ? `نقطهٔ انتخاب‌شده: ${esc(selected.tag)} · ${esc(selected.title)} — انتخاب نقطهٔ دیگر`
+      : "انتخاب تجهیز و نقطهٔ بازرسی"}
+    </summary>
+    <p class="hint">ابتدا یک نقطه انتخاب کنید. فهرست به تفکیک تجهیز باز می‌شود.</p>
+    ${[...grouped.entries()].map(([tag, points]) => `<details class="in-equipment-options">
+      <summary>${esc(tag)} · ${esc(points[0].equipment)} <span class="chip">${points.length.toLocaleString("fa-IR")} نقطه</span></summary>
+      <div class="in-point-options">${points.map((row) => `
+        <button class="in-point-option ${row.id === selectedId ? "selected" : ""}" data-act="select-in-point" data-id="${row.id}">
+          <b>${esc(row.title)}</b>
+          <small>${esc(row.project_name)} · ${esc(row.discipline_label)} · ${esc(row.request_status === "draft" ? "آماده ثبت IN" : row.request_status === "returned" ? "مرجوع‌شده برای اصلاح" : "نقص مدارک")}</small>
+        </button>`).join("")}</div>
+    </details>`).join("") || `<p class="empty">نقطه‌ای برای ثبت IN موجود نیست.</p>`}
+  </details>`;
 }
 
 async function renderManagerDesk() {
@@ -547,7 +620,6 @@ async function renderManagerDesk() {
       ${(data.in_forms || []).map((form) => `<tr><td>${esc(form.number || "—")}</td><td>${esc(form.date || "—")}</td><td>${esc(form.buyer)}</td><td>${esc(form.project)}</td><td>${esc(form.tag)} · ${esc(form.title)}</td><td>${esc({
         manager_review: "در انتظار مدیر پروژه",
         unit_review: "در انتظار مدیر واحد",
-        executive_review: "در انتظار مدیر اجرایی",
         inspection_queue: "در کارتابل بازرسی",
         approved: "تأیید شده و ارجاع به بازرس",
         approved_no_inspector: "در انتظار بازرس آنلاین",
@@ -558,7 +630,7 @@ async function renderManagerDesk() {
     claims: billBoard(bills),
   };
   app.innerHTML = shell(
-    state.me.role === "manager" ? "میز کار مدیر پروژه" : "میز کار مدیر اجرایی",
+    "میز کار مدیر پروژه",
     "گزارش‌های بازرسی، درخواست‌های IN و مسیر مالی پرونده‌ها.",
     `<div class="desk">
       <section class="kpis">
@@ -573,32 +645,35 @@ async function renderManagerDesk() {
   );
   clearTimeout(state.deskTimer);
   state.deskTimer = setTimeout(() => {
-    if (state.view === "desk" && ["manager", "executive_manager"].includes(state.me?.role)) render();
+    if (state.view === "desk" && state.me?.role === "manager") render();
   }, 6000);
 }
 
 async function renderUnitManagerDesk() {
-  const data = await api("/api/unit-manager/desk");
+  const [data, reports] = await Promise.all([api("/api/unit-manager/desk"), api("/api/reports/unit")]);
   app.innerHTML = shell(
     "کارتابل مدیر واحد",
-    "درخواست‌های ارجاع‌شده برای بررسی تخصصی",
-    `<article class="card pad"><div class="picked-list">${(data.requests || []).map((request) => `
+    "درخواست‌های IN و گزارش‌های برگشتی برای تأیید",
+    `<article class="card pad"><h3>درخواست‌های IN ارجاع‌شده</h3><div class="picked-list">${(data.requests || []).map((request) => `
       <div class="card pad">
         <h3>${esc(request.tag)} · ${esc(request.title)}</h3>
         <p>${esc(request.buyer)} · ${esc(request.project)} · واحد ${esc(request.department || request.discipline)}</p>
         ${request.request_note ? `<p class="hint">${esc(request.request_note)}</p>` : ""}
+        <label class="signature-upload">مهر و امضای مدیر واحد<input id="request-unit-signature-${request.point_id}" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" required></label>
         <div class="actions">
           ${request.request_form_id ? `<button class="ghost" data-act="open-sheet" data-kind="in" data-id="${request.request_form_id}">مشاهده فرم IN</button>` : ""}
           <button class="ghost" data-act="open-point" data-id="${request.point_id}">جزئیات و گفتگو</button>
-          <button class="primary" data-act="approve-request-unit" data-id="${request.point_id}">تأیید و ارسال به کارتابل بازرسی</button>
+          <button class="primary" data-act="approve-request-unit" data-id="${request.point_id}">ثبت مهر و امضا، تأیید و ارسال به اسنپ</button>
           <button class="warn" data-act="return-request" data-id="${request.point_id}">مرجوع به مدیر پروژه</button>
         </div>
-      </div>`).join("") || `<p class="empty">درخواستی برای واحد شما ارجاع نشده است.</p>`}</div></article>`
+      </div>`).join("") || `<p class="empty">درخواستی برای واحد شما ارجاع نشده است.</p>`}</div></article>
+    <article class="card pad"><h3>گزارش‌های بازرسی برای تأیید</h3><div class="picked-list">${(reports || []).map((row) => reportCard(row, `
+      <div class="actions"><button class="primary" data-act="open-ivr" data-id="${row.visit_id}">بازبینی و تأیید در فرم IVR</button></div>`)).join("") || `<p class="empty">گزارشی برای تأیید مدیر واحد نیست.</p>`}</div></article>`
   );
 }
 
 async function renderDesk() {
-  if (["manager", "executive_manager"].includes(state.me.role)) {
+  if (state.me.role === "manager") {
     await renderManagerDesk();
     return;
   }
@@ -649,22 +724,24 @@ async function renderDesk() {
     seen.get(row.tag).items.push(row);
   });
   const showMoney = ["coordinator", "buyer", "manager", "admin"].includes(state.me.role);
+  const showOperationalDashboard = state.me.role !== "buyer";
   const caseMode = kind === "case";
   const pieces = new Set(board.map((row) => row.tag)).size;
   app.innerHTML = shell(
-    caseMode ? "بازرسی موردی" : "بازرسی پروژه‌ها",
-    caseMode ? "یک درخواست جدا، بدون برنامه چندنقطه‌ای" : "طرح فلامینگو · برنامه ITP تجهیزات ثابت",
+    state.me.role === "buyer" ? "میز کار کارفرما" : caseMode ? "بازرسی موردی" : "بازرسی پروژه‌ها",
+    state.me.role === "buyer" ? "درخواست‌های بازرسی کارفرما" : caseMode ? "یک درخواست جدا، بدون برنامه چندنقطه‌ای" : "برنامه ITP تجهیزات ثابت",
     `<div class="desk">
       ${manager ? managerTray(reports) : ""}
       ${state.me.role === "buyer" ? buyerRequestTray(board) : ""}
       ${client ? clientTray(released) : ""}
       ${client ? billBoard(bills) : ""}
+      ${showOperationalDashboard ? `
       <section class="hero-card">
         ${ring(percent)}
         <div>
           <p class="eyebrow">سلام ${esc(state.me.name)}</p>
           <h2>${accepted.toLocaleString("fa-IR")} نقطه از ${total.toLocaleString("fa-IR")} تأیید شده است</h2>
-          <p>${caseMode ? "این درخواست داخل طرح فلامینگو نیست. مدارک همان قلم باید آماده باشد و بازرس مثل بقیه درخواست‌ها آن را می‌پذیرد." : "اعزام فقط بعد از کامل شدن مدارک انجام می‌شود. پذیرش بازرس ۳۰ دقیقه مهلت دارد."}</p>
+          <p>${caseMode ? "مدارک همان قلم باید آماده باشد و بازرس مثل بقیه درخواست‌ها آن را می‌پذیرد." : "اعزام فقط بعد از کامل شدن مدارک انجام می‌شود. پذیرش بازرس ۳۰ دقیقه مهلت دارد."}</p>
         </div>
         <div class="hero-side">
           <span><b>${liveCount.toLocaleString("fa-IR")}</b> اعزام زنده</span>
@@ -717,6 +794,7 @@ async function renderDesk() {
         ${column("بازبینی و عدم انطباق", "review", groups.review, 6)}
         ${column("بسته شده", "done", groups.done, 5)}
       </section>
+      ` : ""}
     </div>`
   );
   clearTimeout(state.deskTimer);
@@ -764,6 +842,7 @@ function requestSheet(offer) {
     <p>${esc(offer.equipment.workshop_name)} · ${Number(offer.offer.distance_km).toLocaleString("fa-IR")} کیلومتر</p>
     <div class="fare">
       <b>${money(offer.offer.net_irr)}</b>
+      ${offer.offer.travel_irr ? `<span>هزینه رفت‌وآمد یک‌طرفه ${money(offer.offer.travel_irr)}</span>` : ""}
       <span>مهلت ${minutes.toLocaleString("fa-IR")}:${String(seconds).padStart(2, "0").replace(/\d/g, (digit) => "۰۱۲۳۴۵۶۷۸۹"[digit])}</span>
     </div>
     ${historyBlock(offer.history)}
@@ -881,7 +960,6 @@ async function renderPoint() {
   const canReturn = (
     state.me.role === "manager" && point.request_status === "manager_review"
     || state.me.role === "unit_manager" && point.request_status === "unit_review"
-    || state.me.role === "executive_manager" && point.request_status === "executive_review"
     || ["coordinator", "admin"].includes(state.me.role) && ["inspection_queue", "approved_no_inspector"].includes(point.request_status)
   );
   app.innerHTML = shell(
@@ -903,7 +981,6 @@ async function renderPoint() {
           draft: "ثبت نشده",
           documents_missing: "مدرک ناقص",
           manager_review: "در انتظار مدیر پروژه",
-          executive_review: "در انتظار مدیر اجرایی",
           unit_review: "در انتظار مدیر واحد",
           inspection_queue: "در کارتابل بازرسی",
           approved: "تأیید و ارسال به بازرس",
@@ -911,12 +988,20 @@ async function renderPoint() {
           returned: "برگشت‌خورده برای اصلاح",
         }[point.request_status] || point.request_status)}</p>
         ${point.request_note ? `<p class="hint">${esc(point.request_note)}</p>` : ""}
-        ${point.request_form_id && ["buyer", "manager", "executive_manager"].includes(state.me.role) ? `<button class="ghost" data-act="open-sheet" data-id="${point.request_form_id}" data-kind="in">مشاهده فرم IN کارفرما</button>` : ""}
+        ${point.request_form_id && ["buyer", "manager"].includes(state.me.role) ? `<button class="ghost" data-act="open-sheet" data-id="${point.request_form_id}" data-kind="in">مشاهده فرم IN کارفرما</button>` : ""}
+        ${point.request_approvals?.length ? `<section class="request-approvals"><h3>مهر و امضاهای مراحل تأیید</h3><div class="approval-signatures">${point.request_approvals.map((approval) => `
+          <article class="approval-signature">
+            <p><b>${approval.stage === "manager" ? "مدیر پروژه" : "مدیر واحد"}</b> · ${esc(approval.actor)}</p>
+            <small>${esc(approval.created_at)} · ${esc(approval.filename)}</small>
+            <a href="${esc(approval.url)}" target="_blank" rel="noopener"><img src="${esc(approval.url)}" alt="مهر و امضای ${approval.stage === "manager" ? "مدیر پروژه" : "مدیر واحد"}"></a>
+          </article>`).join("")}</div></section>` : ""}
         ${state.me.role === "manager" && point.request_status === "manager_review" ? `<div class="archive-upload">
           <label>واحد تخصصی<select id="request-department">${Object.entries(DISC).map(([key, label]) => `<option value="${esc(label)}" ${key === point.discipline ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
           <label>مدیر واحد<select id="request-unit-manager">${unitManagers.map((manager) => `<option value="${manager.id}">${esc(manager.name)}</option>`).join("")}</select></label>
           <label>یادداشت مدیر پروژه<input id="request-manager-note" value=""></label>
+          <label class="signature-upload">مهر و امضای مدیر پروژه<input id="request-manager-signature" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" required></label>
         </div>` : ""}
+        ${state.me.role === "unit_manager" && point.request_status === "unit_review" ? `<label class="signature-upload">مهر و امضای مدیر واحد<input id="request-unit-signature-${point.id}" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" required></label>` : ""}
         <h3>چک‌لیست</h3>
         <ul>${point.checklist.map((item) => `<li>${esc(item.text)}</li>`).join("")}</ul>
         <h3>مدارک لازم</h3>
@@ -924,14 +1009,11 @@ async function renderPoint() {
         ${point.missing_docs.length ? `<p class="chip wait">ناقص: ${point.missing_docs.map((doc) => esc(doc.label)).join("، ")}</p>` : `<p class="chip ok">مدارک این نقطه آماده‌اند</p>`}
         <div class="actions">
           ${state.me.role === "buyer" && ["draft", "documents_missing", "returned"].includes(point.request_status) ? `<button class="primary" data-act="open-request-form" data-id="${point.id}">ثبت فرم IN و ارسال درخواست</button>` : ""}
-          ${state.me.role === "manager" && point.request_status === "manager_review" ? `<button class="primary" data-act="approve-request-manager" data-id="${point.id}">تأیید و ارجاع به مدیر واحد</button>` : ""}
-          ${state.me.role === "unit_manager" && point.request_status === "unit_review" ? `<button class="primary" data-act="approve-request-unit" data-id="${point.id}">تأیید و ارسال پیشنهاد به بازرسان</button>` : ""}
-          ${state.me.role === "executive_manager" && point.request_status === "executive_review" ? `<button class="primary" data-act="approve-request-executive" data-id="${point.id}">تأیید و ارسال پیشنهاد به نزدیک‌ترین بازرس</button>` : ""}
+          ${state.me.role === "manager" && point.request_status === "manager_review" ? `<button class="primary" data-act="approve-request-manager" data-id="${point.id}">ثبت مهر و امضا، تأیید و ارجاع به مدیر واحد</button>` : ""}
+          ${state.me.role === "unit_manager" && point.request_status === "unit_review" ? `<button class="primary" data-act="approve-request-unit" data-id="${point.id}">ثبت مهر و امضا و ارسال به اسنپ</button>` : ""}
           ${state.me.role === "vendor" && ["planned", "ready"].includes(point.status) ? `<button class="primary" data-act="ready" data-id="${point.id}" data-remote="${point.remote_allowed ? "1" : "0"}">اعلام آمادگی</button>` : ""}
           ${["coordinator", "admin"].includes(state.me.role) && point.status === "ready" && point.request_status === "approved_no_inspector" ? `<button class="primary" data-act="broadcast" data-id="${point.id}">ارسال به بازرسان نزدیک</button>` : ""}
           ${latest ? `<button class="ghost" data-act="open-ivr" data-id="${latest.id}">گزارش IVR</button>` : ""}
-          ${latest && latest.phase === "submitted" && ["manager", "coordinator", "admin"].includes(state.me.role) && latest.result === "accept" ? `<button class="primary" data-act="review" data-id="${latest.id}" data-decision="approve">تأیید و ارسال به کارفرما</button>` : ""}
-          ${latest && latest.phase === "submitted" && ["manager", "coordinator", "admin"].includes(state.me.role) ? `<button class="warn" data-act="review" data-id="${latest.id}" data-decision="return">برگرداندن به‌خاطر مغایرت</button>` : ""}
         </div>
         ${canReturn ? `<div class="archive-upload">
           <label>دلیل مرجوعی<input id="request-return-reason" minlength="3" maxlength="2000" placeholder="دلیل مرجوعی را وارد کنید"></label>
@@ -939,11 +1021,10 @@ async function renderPoint() {
         </div>` : ""}
         <h3>گفتگو و یادداشت‌های درخواست</h3>
         <div class="picked-list">${(point.request_comments || []).map((comment) => `<div class="person"><span>${esc(comment.author)}: ${esc(comment.body)}</span><small>${esc(faWhen(comment.created_at).date)} ${esc(faWhen(comment.created_at).time)}</small></div>`).join("") || `<p class="empty">نظری ثبت نشده است.</p>`}</div>
-        ${["admin", "coordinator", "executive_manager", "unit_manager", "manager", "buyer", "vendor"].includes(state.me.role) ? `<div class="archive-upload"><label>ثبت نظر<input id="request-comment-body" maxlength="4000" placeholder="یادداشت یا پاسخ"></label><button class="ghost" data-act="send-request-comment" data-id="${point.id}">ارسال نظر</button></div>` : ""}
       </article>
       <article class="card pad">
         <h3>پیشنهادها</h3>
-        ${detail.offers.slice(0, 8).map((offer) => `<div class="person ${offer.status === "accepted" ? "chosen" : ""}"><span>${esc(offer.inspector)}${offer.status === "accepted" ? " · انتخاب شد" : ""}</span><small>${esc(OFFER_STATUS[offer.status] || offer.status)} · ${money(offer.net_irr)}</small></div>`).join("") || "<p>هنوز پیشنهادی نرفته است.</p>"}
+        ${detail.offers.slice(0, 8).map((offer) => `<div class="person ${offer.status === "accepted" ? "chosen" : ""}"><span>${esc(offer.inspector)}${offer.status === "accepted" ? " · انتخاب شد" : ""}</span><small>${esc(OFFER_STATUS[offer.status] || offer.status)} · ${money(offer.net_irr)}${offer.travel_irr ? ` · رفت‌وآمد: ${money(offer.travel_irr)}` : ""}</small></div>`).join("") || "<p>هنوز پیشنهادی نرفته است.</p>"}
         <h3>مراحل قبلی و ایرادها</h3>
         ${historyBlock(detail.history)}
         <h3>بازدیدها</h3>
@@ -956,13 +1037,15 @@ async function renderPoint() {
 async function renderIvr(visitId) {
   const report = await api(`/api/visits/${visitId}/ivr`);
   const canAttach = state.me.role === "inspector" && report.visit.location_confirmed && report.visit.phase === "on_site";
+  const canReview = report.visit.phase === "submitted" && state.me.role === "manager"
+    || report.visit.phase === "unit_review" && state.me.role === "unit_manager";
   const comments = report.comments || [];
   app.innerHTML = shell(
     report.visit.ivr_no,
     `${report.context.equipment.tag} · ${report.context.point.title}`,
     `<article class="card pad detail">
       <p>بازرس: ${esc(report.visit.inspector)} · ${esc(report.visit.city)}</p>
-      <p>نتیجه: ${esc(report.visit.result === "accept" ? "قبول" : report.visit.result === "reject" ? "رد" : report.visit.result)}${report.visit.phase === "confirmed" ? " · تأیید کارفرما، در کارنامه بازرس" : report.visit.phase === "client" ? " · در کارتابل کارفرما" : report.visit.phase === "submitted" ? " · در انتظار بررسی هماهنگ‌کننده" : ""}</p>
+      <p>نتیجه: ${esc(report.visit.result === "accept" ? "قبول" : report.visit.result === "reject" ? "رد" : report.visit.result)}${report.visit.phase === "confirmed" ? " · تأیید کارفرما، در کارنامه بازرس" : report.visit.phase === "client" ? " · در کارتابل کارفرما" : report.visit.phase === "unit_review" ? " · در انتظار تأیید مدیر واحد" : report.visit.phase === "submitted" ? " · در انتظار بررسی مدیر پروژه" : ""}</p>
       <p>${esc(report.visit.note)}</p>
       ${report.visit.arrive_distance_km != null ? `<p>فاصله ورود تا کارگاه: ${Number(report.visit.arrive_distance_km).toLocaleString("fa-IR")} کیلومتر</p>` : ""}
       <h3>چک‌لیست</h3>
@@ -970,11 +1053,20 @@ async function renderIvr(visitId) {
       <h3>پیوست‌های بازرسی</h3>
       <div class="gallery">${report.photos.map((row) => `<figure>${row.url ? (row.media_type?.startsWith("video/") ? `<video src="${esc(row.url)}" controls></video>` : row.media_type?.startsWith("image/") ? `<img src="${esc(row.url)}" alt="${esc(row.caption)}">` : `<a href="${esc(row.url)}">دریافت ${esc(row.filename || "فایل")}</a>`) : ""}<figcaption>${esc(row.kind === "environment" ? "محیط" : row.kind === "marker" ? "پیکان‌کار" : "مورد بازرسی")} · ${esc(row.caption || row.filename || "")}</figcaption></figure>`).join("") || "<p>پیوستی ثبت نشده است.</p>"}</div>
       ${canAttach ? `<div class="archive-upload"><label>بارگذاری عکس، ویدئو یا مدرک<input id="visit-attachment" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt"></label><button class="primary" data-act="upload-visit-attachment" data-id="${report.visit.id}">پیوست به گزارش</button><p class="hint">بارگذاری فقط پس از تأیید موقعیت جغرافیایی فعال است.</p></div>` : ""}
+      ${canReview ? `<section class="review-actions">
+        <h3>${state.me.role === "manager" ? "تصمیم مدیر پروژه" : "تصمیم مدیر واحد"}</h3>
+        <p class="hint">${state.me.role === "manager" ? "با تأیید، گزارش به مدیر واحد می‌رود؛ در صورت نقص با توضیح برای اصلاح به بازرس برمی‌گردد." : "با تأیید مدیر واحد، گزارش برای کارفرما ارسال می‌شود؛ در صورت نقص با توضیح به مدیر پروژه برمی‌گردد."}</p>
+        <label>دلیل مرجوعی<textarea id="report-review-note" rows="3" maxlength="2000" placeholder="برای مرجوع‌کردن، دلیل را بنویسید"></textarea></label>
+        <div class="actions">
+          ${report.visit.result === "accept" ? `<button class="primary" data-act="review" data-id="${report.visit.id}" data-decision="approve">تأیید نهایی ${state.me.role === "manager" ? "و ارسال به مدیر واحد" : "و ارسال به کارفرما"}</button>` : ""}
+          <button class="warn" data-act="review" data-id="${report.visit.id}" data-decision="return">مرجوع همراه با توضیح</button>
+        </div>
+      </section>` : ""}
       <h3>گفت‌وگو درباره گزارش</h3>
       <div class="stack">${comments.map((comment) => `<div class="person"><span><b>${esc(comment.author)}</b><small>${esc(comment.body)}</small></span><small>${esc(comment.created_at)}</small></div>`).join("") || "<p>نظری ثبت نشده است.</p>"}</div>
       <div class="archive-upload"><label>نظر یا درخواست اصلاح<textarea id="report-comment" rows="3" maxlength="4000"></textarea></label><button class="primary" data-act="send-comment" data-id="${report.visit.id}">ارسال نظر و اطلاع‌رسانی</button></div>
       <div class="timeline">${report.timeline.map((row) => `<div>${esc(row.at)} · ${esc(row.action)} ${esc(row.detail)}</div>`).join("")}</div>
-      ${report.money ? `<p>سهم بازرس ${money(report.money.net_irr)} از ${money(report.money.fee_irr)}</p>` : ""}
+      ${report.money ? `<p>سهم بازرس ${money(report.money.net_irr)} از ${money(report.money.fee_irr)}${report.money.travel_irr ? ` · هزینه رفت‌وآمد یک‌طرفه ${money(report.money.travel_irr)}` : ""}</p>` : ""}
       ${state.me.role !== "buyer" ? `<div class="actions"><button class="ghost" data-act="open-form" data-kind="ivr">فرم خالی IVR</button></div>` : ""}
     </article>`
   );
@@ -1108,6 +1200,25 @@ function blankControl(field, value, disabled = false) {
   return `<label class="blank${wide}"><span>${esc(field.label)}</span><input data-form-key="${esc(field.key)}" value="${esc(value || "")}"${readonly}></label>`;
 }
 
+function prefillInspectionRequest(detail) {
+  return {
+    customer_location: "iran",
+    client: detail.companies.buyer,
+    project: detail.project.name,
+    po: detail.order.number,
+    contractor: detail.companies.vendor,
+    vendor: detail.companies.vendor,
+    manufacturer: detail.companies.vendor,
+    location: `${detail.equipment.workshop_name}، ${detail.equipment.city}`,
+    tag: detail.equipment.tag,
+    itp_item: String(detail.point.seq),
+    discipline: detail.point.discipline_label,
+    reference: detail.point.standard_ref,
+    scope: detail.point.title,
+    category: "درخواست بازرسی",
+  };
+}
+
 function blankTable(table, rows, disabled = false) {
   const readonly = disabled ? " disabled" : "";
   const body = (rows || []).map((row, index) => `<tr>${table.columns.map((column) => `<td><input data-form-table="${esc(table.key)}" data-row="${index}" data-col="${esc(column.key)}" value="${esc((row || {})[column.key] || "")}"${readonly}></td>`).join("")}</tr>`).join("");
@@ -1141,35 +1252,38 @@ function collectForm() {
 }
 
 async function renderForms() {
-  const kind = state.requestPointId ? "in" : state.me.role === "buyer" ? "in" : state.formKind || "ivr";
-  const [sheet, saved] = await Promise.all([
+  const kind = state.inRequestMode || state.requestPointId ? "in" : state.me.role === "buyer" ? "in" : state.formKind || "ivr";
+  const [sheet, saved, requestBoard] = await Promise.all([
     state.formId ? api(`/api/forms/${state.formId}`) : api(`/api/forms/template/${kind}`),
     (state.me.role === "manager" && kind === "in") || (state.me.role === "buyer" && !state.requestPointId)
       ? Promise.resolve([])
       : api(`/api/forms?kind=${kind}`),
+    state.inRequestMode ? api(`/api/board?kind=${state.kind === "case" ? "case" : "project"}`) : Promise.resolve([]),
   ]);
-  if (state.formDraft && !state.formId) sheet.payload = { ...sheet.payload, ...state.formDraft };
   if (state.requestPrefill && !state.formId) sheet.payload = { ...sheet.payload, ...state.requestPrefill };
+  if (state.formDraft && !state.formId) sheet.payload = { ...sheet.payload, ...state.formDraft };
   const displaySheet = kind === "in" && sheet.payload.customer_location === "international"
     ? localizeInSheet(sheet)
     : sheet;
   state.formSpec = sheet;
   const viewOnly = (state.me.role === "manager" && kind === "in" && Boolean(state.formId))
-    || (state.me.role === "buyer" && !state.requestPointId);
-  const tabs = state.me.role === "executive_manager"
-    ? [["in", "IN"], ["itp", "ITP"], ["ivr", "IVR"], ["mom", "MOM"]]
-    : state.me.role === "buyer" ? [["in", "IN"]] : [["ivr", "IVR"]];
+    || (state.me.role === "buyer" && !state.inRequestMode);
+  const formDisabled = viewOnly || (state.inRequestMode && !state.requestPointId);
+  const canSubmitRequest = state.inRequestMode && Boolean(state.requestPointId);
+  const tabs = state.me.role === "buyer" ? [["in", "IN"]] : [["ivr", "IVR"]];
   app.innerHTML = shell(
     `${displaySheet.code} · ${displaySheet.title_fa}`,
     displaySheet.title,
     `<div class="formpage">
       <div class="formtabs">
         ${tabs.map(([id, label]) => `<button class="ghost ${kind === id ? "on" : ""}" data-act="form-kind" data-kind="${id}">${label}</button>`).join("")}
-        ${state.requestPointId ? `<label><input id="request-remote" type="checkbox"> درخواست بازرسی از راه دور</label>` : ""}
+        ${canSubmitRequest ? `<label><input id="request-remote" type="checkbox"> درخواست بازرسی از راه دور</label>` : ""}
         ${!state.requestPointId ? `<button class="ghost" data-act="new-form">فرم تازه</button>` : ""}
         <button class="ghost" data-act="print-form">چاپ</button>
-        ${!viewOnly ? `<button class="primary" data-act="save-form">${state.requestPointId ? "ثبت IN و ارسال به مدیر پروژه" : "ثبت جاهای پر شده"}</button>` : ""}
+        ${!viewOnly && (!state.inRequestMode || canSubmitRequest) ? `<button class="primary" data-act="save-form">${canSubmitRequest ? "ثبت نهایی IN و ارسال به کارتابل مدیر پروژه" : "ثبت جاهای پر شده"}</button>` : ""}
       </div>
+      ${state.inRequestMode ? inRequestPointChooser(requestBoard, state.requestPointId) : ""}
+      ${state.inRequestMode && !state.requestPointId ? `<p class="chip wait">برای تکمیل فرم، ابتدا نقطهٔ بازرسی را از فهرست بالا انتخاب کنید.</p>` : ""}
       <div class="formlayout">
         <article class="sheet" id="sheet">
           <header class="sheet-head">
@@ -1177,9 +1291,9 @@ async function renderForms() {
             <div class="sheet-no"><span>شماره</span><strong>${esc(sheet.payload.number || "—")}</strong></div>
           </header>
           <p class="hint">${esc(displaySheet.note)}</p>
-          ${displaySheet.sections.map((section) => `<section><h3>${esc(section.title)}</h3><div class="blanks">${section.fields.map((field) => blankControl(field, sheet.payload[field.key], viewOnly)).join("")}</div></section>`).join("")}
-          ${(displaySheet.tables || []).map((table) => `<section><h3>${esc(table.title)}</h3>${blankTable(table, sheet.payload[table.key], viewOnly)}</section>`).join("")}
-          ${displaySheet.tail ? `<section><h3>${esc(displaySheet.tail.title)}</h3><div class="blanks">${displaySheet.tail.fields.map((field) => blankControl(field, sheet.payload[field.key], viewOnly)).join("")}</div></section>` : ""}
+          ${displaySheet.sections.map((section) => `<section><h3>${esc(section.title)}</h3><div class="blanks">${section.fields.map((field) => blankControl(field, sheet.payload[field.key], formDisabled)).join("")}</div></section>`).join("")}
+          ${(displaySheet.tables || []).map((table) => `<section><h3>${esc(table.title)}</h3>${blankTable(table, sheet.payload[table.key], formDisabled)}</section>`).join("")}
+          ${displaySheet.tail ? `<section><h3>${esc(displaySheet.tail.title)}</h3><div class="blanks">${displaySheet.tail.fields.map((field) => blankControl(field, sheet.payload[field.key], formDisabled)).join("")}</div></section>` : ""}
         </article>
         <aside class="card pad">
           <h3>پیش‌نویس‌های ${esc(sheet.code)}</h3>
@@ -1188,6 +1302,10 @@ async function renderForms() {
           </div>
         </aside>
       </div>
+      ${canSubmitRequest ? `<div class="form-submit-sticky">
+        <p><b>ثبت نهایی درخواست بازرسی</b><span>فرم IN ذخیره و برای بررسی به کارتابل مدیر پروژه ارسال می‌شود.</span></p>
+        <button class="primary" data-act="save-form">ثبت نهایی IN و ارسال به کارتابل مدیر پروژه</button>
+      </div>` : ""}
     </div>`
   );
 }
@@ -1197,7 +1315,13 @@ async function renderNotifications() {
   app.innerHTML = shell(
     "اعلان‌ها",
     "پیام‌های مربوط به درخواست‌های بازرسی، گزارش‌ها و مدارک ناقص.",
-    `<article class="card pad stack">${rows.map((row) => `<div class="person"><span><b>${esc(row.title)}</b><small>${esc(row.body)}</small></span><small>${row.read ? "خوانده‌شده" : "جدید"}</small></div>`).join("") || `<p class="empty">اعلانی ثبت نشده است.</p>`}</article>`
+    `<article class="card pad stack">${rows.map((row) => row.target?.type === "ivr"
+      ? `<button class="notification-link" data-act="open-ivr" data-id="${row.target.id}">
+          <span><b>${esc(row.title)}</b><small>${esc(row.body)}</small></span>
+          <span class="notification-action">${row.read ? "مشاهدهٔ گزارش" : "جدید · مشاهدهٔ گزارش"}</span>
+        </button>`
+      : `<div class="person"><span><b>${esc(row.title)}</b><small>${esc(row.body)}</small></span><small>${row.read ? "خوانده‌شده" : "جدید"}</small></div>`
+    ).join("") || `<p class="empty">اعلانی ثبت نشده است.</p>`}</article>`
   );
 }
 
@@ -1361,15 +1485,17 @@ async function render() {
   if (
     state.me.role === "buyer"
     && ["dispatch", "forms", "benchmark", "technology"].includes(state.view)
-    && !(state.view === "forms" && state.requestPointId)
+    && !(state.view === "forms" && (state.requestPointId || state.inRequestMode))
   ) {
     state.view = "desk";
+    state.viewHistory = [];
   }
   if (
     state.me.role === "vendor"
     && !["desk", "docs", "notifications", "point"].includes(state.view)
   ) {
     state.view = "desk";
+    state.viewHistory = [];
   }
   const views = {
     desk: renderDesk,
@@ -1397,78 +1523,130 @@ async function render() {
 }
 
 async function onClick(event) {
+  const requestPanelSummary = event.target.closest(".buyer-request-box > summary");
+  if (requestPanelSummary) {
+    const panels = [...app.querySelectorAll(".buyer-request-box")];
+    const index = panels.indexOf(requestPanelSummary.parentElement);
+    if (index >= 0) state.buyerRequestPanels[index] = !panels[index].open;
+    return;
+  }
   const node = event.target.closest("[data-act]");
   if (!node) return;
   const act = node.dataset.act;
   try {
     if (act === "login") {
       state.me = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username: node.dataset.user, password: "demo1234" }) });
+      state.viewHistory = [];
       state.view = state.me.role === "inspector" ? "dispatch" : "desk";
       await render();
     } else if (act === "logout") {
       await api("/api/auth/logout", { method: "POST" });
       state.me = null;
+      state.viewHistory = [];
       render();
+    } else if (act === "back") {
+      goBack();
+      await render();
     } else if (act === "open-form") {
+      state.formReturnView = state.view === "forms" ? state.formReturnView : state.view;
+      state.inRequestMode = false;
       state.formKind = node.dataset.kind || "itp";
       state.formId = null;
       state.formDraft = null;
       state.requestPointId = null;
       state.requestPrefill = null;
-      state.view = "forms";
+      navigateTo("forms");
       await render();
     } else if (act === "form-kind") {
       state.formKind = node.dataset.kind;
       state.formId = null;
       state.formDraft = null;
-      state.view = "forms";
+      navigateTo("forms");
       await render();
     } else if (act === "new-form") {
       state.formId = null;
       state.formDraft = null;
       await render();
     } else if (act === "open-sheet") {
+      state.formReturnView = state.view === "forms" ? state.formReturnView : state.view;
+      state.inRequestMode = false;
       state.formId = Number(node.dataset.id);
       state.formKind = node.dataset.kind || state.formKind;
       state.formDraft = null;
       state.requestPointId = null;
       state.requestPrefill = null;
-      state.view = "forms";
+      navigateTo("forms");
       await render();
-    } else if (act === "open-request-form") {
-      state.pointId = Number(node.dataset.id);
-      const detail = await api(`/api/points/${state.pointId}`);
-      state.requestPointId = state.pointId;
-      state.requestPrefill = {
-        project: detail.project.name,
-        po: detail.order.number,
-        location: `${detail.equipment.workshop_name}، ${detail.equipment.city}`,
-        tag: detail.equipment.tag,
-        discipline: detail.point.discipline_label,
-        category: "درخواست بازرسی",
-      };
+    } else if (act === "begin-in-request") {
+      state.formReturnView = state.view;
+      state.inRequestMode = true;
       state.formKind = "in";
       state.formId = null;
       state.formDraft = null;
-      state.view = "forms";
+      const requestBoard = await api(`/api/board?kind=${state.kind === "case" ? "case" : "project"}`);
+      const firstEligiblePoint = requestBoard.find((row) =>
+        ["draft", "documents_missing", "returned"].includes(row.request_status)
+      );
+      if (!firstEligiblePoint) throw new Error("نقطه‌ای برای ثبت درخواست IN موجود نیست.");
+      state.pointId = Number(firstEligiblePoint.id);
+      const detail = await api(`/api/points/${state.pointId}`);
+      state.requestPointId = state.pointId;
+      state.requestPrefill = prefillInspectionRequest(detail);
+      navigateTo("forms");
+      await render();
+    } else if (act === "open-request-form") {
+      state.formReturnView = state.view === "forms" ? state.formReturnView : state.view;
+      state.pointId = Number(node.dataset.id);
+      const detail = await api(`/api/points/${state.pointId}`);
+      state.inRequestMode = true;
+      state.requestPointId = state.pointId;
+      state.requestPrefill = prefillInspectionRequest(detail);
+      state.formKind = "in";
+      state.formId = null;
+      state.formDraft = null;
+      navigateTo("forms");
+      await render();
+    } else if (act === "select-in-point") {
+      if (state.requestPointId) {
+        state.formDraft = collectForm();
+        ["client", "project", "po", "contractor", "vendor", "manufacturer", "location", "tag", "itp_item", "discipline", "reference"].forEach((key) => {
+          delete state.formDraft[key];
+        });
+      }
+      state.pointId = Number(node.dataset.id);
+      const detail = await api(`/api/points/${state.pointId}`);
+      state.inRequestMode = true;
+      state.requestPointId = state.pointId;
+      state.requestPrefill = prefillInspectionRequest(detail);
+      state.formKind = "in";
+      state.formId = null;
+      navigateTo("forms");
       await render();
     } else if (act === "approve-request-manager") {
       const unitManagerId = Number(document.querySelector("#request-unit-manager")?.value);
       if (!unitManagerId) throw new Error("مدیر واحد را انتخاب کنید.");
+      const signature = document.querySelector("#request-manager-signature")?.files[0];
+      if (!signature) throw new Error("تصویر مهر و امضای مدیر پروژه را بارگذاری کنید.");
+      const form = new FormData();
+      form.append("unit_manager_id", String(unitManagerId));
+      form.append("department", document.querySelector("#request-department")?.value || "");
+      form.append("note", document.querySelector("#request-manager-note")?.value || "");
+      form.append("file", signature);
       const result = await api(`/api/points/${node.dataset.id}/manager-approval`, {
         method: "POST",
-        body: JSON.stringify({
-          note: document.querySelector("#request-manager-note")?.value || "",
-          unit_manager_id: unitManagerId,
-          department: document.querySelector("#request-department")?.value || "",
-        }),
+        body: form,
       });
       toast(result.request_status === "documents_missing" ? result.message : "درخواست برای مدیر واحد ارسال شد");
       await render();
     } else if (act === "approve-request-unit") {
+      const signature = document.querySelector(`#request-unit-signature-${node.dataset.id}`)?.files[0];
+      if (!signature) throw new Error("تصویر مهر و امضای مدیر واحد را بارگذاری کنید.");
+      const form = new FormData();
+      form.append("note", "");
+      form.append("file", signature);
       const result = await api(`/api/points/${node.dataset.id}/unit-approval`, {
         method: "POST",
-        body: JSON.stringify({ note: "" }),
+        body: form,
       });
       toast(result.request_status === "approved_no_inspector" ? result.message : `${result.offers} پیشنهاد برای بازرسان نزدیک ارسال شد`);
       await render();
@@ -1492,13 +1670,6 @@ async function onClick(event) {
       await renderPoint();
     } else if (act === "manager-tab") {
       state.managerTab = node.dataset.tab;
-      await render();
-    } else if (act === "approve-request-executive") {
-      const result = await api(`/api/points/${node.dataset.id}/executive-approval`, {
-        method: "POST",
-        body: JSON.stringify({ note: "" }),
-      });
-      toast(result.request_status === "approved_no_inspector" ? result.message : `${result.offers} پیشنهاد برای بازرسان نزدیک ارسال شد`);
       await render();
     } else if (act === "send-comment") {
       const visitId = Number(node.dataset.id);
@@ -1531,6 +1702,7 @@ async function onClick(event) {
         });
         state.pointId = state.requestPointId;
         state.requestPointId = null;
+        state.inRequestMode = false;
         state.requestPrefill = null;
         state.formDraft = null;
         state.view = "point";
@@ -1548,18 +1720,19 @@ async function onClick(event) {
       }
     } else if (act === "kind") {
       state.kind = node.dataset.kind === "case" ? "case" : "project";
-      state.view = "desk";
+      navigateTo("desk");
       await render();
     } else if (act === "goto") {
-      state.view = node.dataset.view;
+      if (node.dataset.view === "forms" && state.view !== "forms") state.formReturnView = state.view;
+      navigateTo(node.dataset.view);
       await render();
     } else if (act === "open-point") {
       state.pointId = node.dataset.id;
-      state.view = "point";
+      navigateTo("point");
       await render();
     } else if (act === "open-ivr") {
       state.visitId = Number(node.dataset.id);
-      state.view = "ivr";
+      navigateTo("ivr");
       await render();
     } else if (act === "print-archive") {
       window.print();
@@ -1617,11 +1790,21 @@ async function onClick(event) {
       const note = node.dataset.result === "reject" ? "بازدید مردود شد و نیاز به تعمیر دارد." : "بازدید مطابق ITP قابل قبول است و شواهد پیوست شد.";
       await api(`/api/visits/${node.dataset.id}/submit`, { method: "POST", body: JSON.stringify({ result: node.dataset.result, note }) });
       toast("IVR ارسال شد");
-      state.view = "desk";
+      navigateTo("desk");
       await render();
     } else if (act === "review") {
-      await api(`/api/visits/${node.dataset.id}/review`, { method: "POST", body: JSON.stringify({ decision: node.dataset.decision }) });
-      toast(node.dataset.decision === "return" ? "به‌خاطر مغایرت برگردانده شد" : "تأیید شد و در کارتابل کارفرما نشست");
+      const note = document.querySelector("#report-review-note")?.value || "";
+      if (node.dataset.decision === "return" && note.trim().length < 3) {
+        throw new Error("برای مرجوع‌کردن گزارش، دلیل را وارد کنید.");
+      }
+      const result = await api(`/api/visits/${node.dataset.id}/review`, {
+        method: "POST",
+        body: JSON.stringify({ decision: node.dataset.decision, note }),
+      });
+      toast(node.dataset.decision === "return"
+        ? result.visit.phase === "submitted" ? "گزارش با توضیح به مدیر پروژه برگشت" : "گزارش برای اصلاح به بازرس برگشت"
+        : result.visit.phase === "unit_review" ? "گزارش برای تأیید به مدیر واحد ارسال شد"
+          : result.visit.phase === "client" ? "گزارش برای تأیید نهایی به کارفرما ارسال شد" : "تأیید گزارش ثبت شد");
       await render();
     } else if (act === "confirm-report") {
       await api(`/api/visits/${node.dataset.id}/confirm`, { method: "POST" });
@@ -1672,6 +1855,13 @@ async function onClick(event) {
     toast(error.message);
   }
 }
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || state.view !== "forms") return;
+  event.preventDefault();
+  goBack();
+  render();
+});
 
 app.addEventListener("click", onClick);
 app.addEventListener("change", async (event) => {

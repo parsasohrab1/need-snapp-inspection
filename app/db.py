@@ -83,6 +83,14 @@ def init_db() -> None:
         inspector_names = {row[1] for row in inspectors}
         if inspector_names and "engagement" not in inspector_names:
             conn.exec_driver_sql("ALTER TABLE inspectors ADD COLUMN engagement VARCHAR(16) NOT NULL DEFAULT 'fixed'")
+        offers = conn.exec_driver_sql("PRAGMA table_info(offers)").fetchall()
+        offer_names = {row[1] for row in offers}
+        if offer_names and "travel_irr" not in offer_names:
+            conn.exec_driver_sql("ALTER TABLE offers ADD COLUMN travel_irr INTEGER NOT NULL DEFAULT 0")
+        ledger = conn.exec_driver_sql("PRAGMA table_info(ledger)").fetchall()
+        ledger_names = {row[1] for row in ledger}
+        if ledger_names and "travel_irr" not in ledger_names:
+            conn.exec_driver_sql("ALTER TABLE ledger ADD COLUMN travel_irr INTEGER NOT NULL DEFAULT 0")
         bills = conn.exec_driver_sql("PRAGMA table_info(bills)").fetchall()
         bill_names = {row[1] for row in bills}
         if bill_names and "accounting_status" not in bill_names:

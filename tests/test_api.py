@@ -3,6 +3,8 @@ from fastapi.testclient import TestClient
 from app.db import reset_engine
 from app.main import app
 
+TEST_SIGNATURE_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
 
 def test_login_board_and_health():
     with TestClient(app) as client:
@@ -97,15 +99,14 @@ def test_uploaded_documents_are_downloadable_in_project_archive(tmp_path, monkey
         assert archived_document["download_url"] == f"/api/documents/{document_id}/file"
 
 
-def test_project_manager_and_executive_manager_have_distinct_roles():
+def test_project_manager_role_is_available_and_executive_account_is_removed():
     with TestClient(app) as client:
         response = client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
         assert response.status_code == 200
         assert response.json()["role"] == "manager"
         assert "مدیر پروژه" in response.json()["name"]
-        executive = client.post("/api/auth/login", json={"username": "executive", "password": "demo1234"})
-        assert executive.status_code == 200
-        assert executive.json()["role"] == "executive_manager"
+        removed = client.post("/api/auth/login", json={"username": "executive", "password": "demo1234"})
+        assert removed.status_code == 401
 
 
 def test_project_manager_desk_shows_only_operational_lists_and_accounting_status():
@@ -324,6 +325,11 @@ def test_project_manager_review_releases_or_returns_report():
         client.post("/api/auth/login", json={"username": "buyer", "password": "demo1234"})
         released = client.get("/api/reports/client").json()
         assert any(row["visit_id"] == report["visit_id"] for row in released)
+        report_notification = next(
+            row for row in client.get("/api/notifications").json()
+            if row["title"] == "گزارش تأییدشده در کارتابل نشست"
+        )
+        assert report_notification["target"] == {"type": "ivr", "id": report["visit_id"]}
         client.post("/api/auth/login", json={"username": "vendor", "password": "demo1234"})
         assert client.get("/api/reports/client").status_code == 403
 
@@ -343,9 +349,10 @@ def test_project_manager_returns_report_when_discrepant():
         assert all(row["visit_id"] != report["visit_id"] for row in released)
 
 
-def test_buyer_in_request_manager_executive_dispatch_and_form_access(monkeypatch):
+def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp_path):
     reset_engine()
     monkeypatch.setenv("NSI_DATABASE_URL", "sqlite://")
+    monkeypatch.setattr("app.services.files.REQUEST_SIGNATURE_DIR", tmp_path)
     try:
         with TestClient(app) as client:
             assert client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"}).status_code == 200
@@ -386,23 +393,48 @@ def test_buyer_in_request_manager_executive_dispatch_and_form_access(monkeypatch
             assert viewed_in.status_code == 200
             assert viewed_in.json()["payload"]["number"] == "IN-TEST-1"
             assert client.get("/api/forms/template/itp").status_code == 403
-            manager_approved = client.post(f"/api/points/{point['id']}/manager-approval", json={"note": ""})
+            unit_manager_id = next(
+                item["id"] for item in client.get("/api/unit-managers").json()
+                if item["name"] == "مدیر واحد بازرسی"
+            )
+            assert client.post(
+                f"/api/points/{point['id']}/manager-approval",
+                data={"unit_manager_id": unit_manager_id, "department": "مواد"},
+            ).status_code == 422
+            manager_approved = client.post(
+                f"/api/points/{point['id']}/manager-approval",
+                data={"unit_manager_id": unit_manager_id, "department": "مواد", "note": "تأیید مدیر پروژه"},
+                files={"file": ("project-manager-signature.png", TEST_SIGNATURE_PNG, "image/png")},
+            )
             assert manager_approved.status_code == 200
-            assert manager_approved.json()["request_status"] == "executive_review"
+            assert manager_approved.json()["request_status"] == "unit_review"
 
-            client.post("/api/auth/login", json={"username": "executive", "password": "demo1234"})
-            assert client.get("/api/forms/template/itp").status_code == 200
-            executive_approved = client.post(f"/api/points/{point['id']}/executive-approval", json={"note": ""})
-            assert executive_approved.status_code == 200
-            assert executive_approved.json()["request_status"] in {"approved", "approved_no_inspector"}
-            assert client.get("/api/points/{}".format(point["id"])).json()["point"]["request_form_id"] == form_id
+            client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+            detail = client.get(f"/api/points/{point['id']}").json()
+            approvals = detail["point"]["request_approvals"]
+            assert len(approvals) == 1
+            assert approvals[0]["stage"] == "manager"
+            signature = client.get(approvals[0]["url"])
+            assert signature.status_code == 200
+            assert signature.content == TEST_SIGNATURE_PNG
+            unit_approved = client.post(
+                f"/api/points/{point['id']}/unit-approval",
+                data={"note": "تأیید مدیر واحد"},
+                files={"file": ("unit-manager-signature.png", TEST_SIGNATURE_PNG, "image/png")},
+            )
+            assert unit_approved.status_code == 200
+            assert unit_approved.json()["request_status"] in {"inspection_queue", "approved_no_inspector"}
+            approvals = client.get(f"/api/points/{point['id']}").json()["point"]["request_approvals"]
+            assert [approval["stage"] for approval in approvals] == ["manager", "unit_manager"]
+            assert client.get(f"/api/points/{point['id']}").json()["point"]["request_form_id"] == form_id
     finally:
         reset_engine()
 
 
-def test_in_request_is_routed_to_unit_manager_and_can_be_returned(monkeypatch):
+def test_in_request_is_routed_to_unit_manager_and_can_be_returned(monkeypatch, tmp_path):
     reset_engine()
     monkeypatch.setenv("NSI_DATABASE_URL", "sqlite://")
+    monkeypatch.setattr("app.services.files.REQUEST_SIGNATURE_DIR", tmp_path)
     try:
         with TestClient(app) as client:
             client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
@@ -433,7 +465,8 @@ def test_in_request_is_routed_to_unit_manager_and_can_be_returned(monkeypatch):
             unit_manager_id = next(item["id"] for item in managers.json() if item["name"] == "مدیر واحد بازرسی")
             routed = client.post(
                 f"/api/points/{point['id']}/manager-approval",
-                json={"unit_manager_id": unit_manager_id, "department": "جوش", "note": "ارجاع جهت بررسی تخصصی"},
+                data={"unit_manager_id": unit_manager_id, "department": "جوش", "note": "ارجاع جهت بررسی تخصصی"},
+                files={"file": ("project-manager-signature.png", TEST_SIGNATURE_PNG, "image/png")},
             )
             assert routed.status_code == 200
             assert routed.json()["request_status"] == "unit_review"
@@ -460,11 +493,16 @@ def test_in_request_is_routed_to_unit_manager_and_can_be_returned(monkeypatch):
             client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
             routed_again = client.post(
                 f"/api/points/{point['id']}/manager-approval",
-                json={"unit_manager_id": unit_manager_id, "department": "جوش"},
+                data={"unit_manager_id": unit_manager_id, "department": "جوش"},
+                files={"file": ("project-manager-signature.png", TEST_SIGNATURE_PNG, "image/png")},
             )
             assert routed_again.json()["request_status"] == "unit_review"
             client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
-            approved = client.post(f"/api/points/{point['id']}/unit-approval", json={"note": "تأیید واحد"})
+            approved = client.post(
+                f"/api/points/{point['id']}/unit-approval",
+                data={"note": "تأیید واحد"},
+                files={"file": ("unit-manager-signature.png", TEST_SIGNATURE_PNG, "image/png")},
+            )
             assert approved.status_code == 200
             assert approved.json()["request_status"] in {"inspection_queue", "approved_no_inspector"}
             client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
@@ -568,7 +606,7 @@ def test_client_approval_fills_inspector_record():
         rows = client.get("/api/inspector/record").json()
         match = next(row for row in rows if row["visit_id"] == report["visit_id"])
         assert match["company"] == "ماشین‌سازی البرز"
-        assert match["client"] == "کارفرمای طرح فلامینگو"
+        assert match["client"] == "پتروشیمی بندر امام"
         assert match["date"]
         assert match["time"]
         assert "تا" in match["window"]

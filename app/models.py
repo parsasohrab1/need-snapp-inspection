@@ -144,6 +144,7 @@ class Offer(Base):
     fee_irr: Mapped[int] = mapped_column(Integer)
     commission_irr: Mapped[int] = mapped_column(Integer)
     net_irr: Mapped[int] = mapped_column(Integer)
+    travel_irr: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     expires_at: Mapped[datetime] = mapped_column()
     decided_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -195,6 +196,17 @@ class InspectionRequestComment(Base):
     point_id: Mapped[int] = mapped_column(ForeignKey("inspection_points.id"))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class InspectionRequestApproval(Base):
+    __tablename__ = "inspection_request_approvals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    point_id: Mapped[int] = mapped_column(ForeignKey("inspection_points.id"))
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    stage: Mapped[str] = mapped_column(String(20))
+    signature_filename: Mapped[str] = mapped_column(String(200))
+    signature_stored_name: Mapped[str] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
@@ -283,6 +295,7 @@ class Ledger(Base):
     fee_irr: Mapped[int] = mapped_column(Integer)
     commission_irr: Mapped[int] = mapped_column(Integer)
     net_irr: Mapped[int] = mapped_column(Integer)
+    travel_irr: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
