@@ -172,7 +172,7 @@ def unit_manager_dashboard(actor: User = Depends(current_user), db: Session = De
 
 @app.get("/api/unit-managers")
 def unit_managers(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "admin"}:
         raise DomainError("forbidden", "فقط مدیران می‌توانند مدیر واحد را انتخاب کنند.", 403)
     return [{"id": user.id, "name": user.name} for user in db.scalars(select(User).where(User.role == "unit_manager").order_by(User.name)).all()]
 
@@ -217,7 +217,7 @@ def request_approval_signature(
 @app.post("/api/points/{point_id}/ready")
 def ready(point_id: int, body: ReadyIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.mark_ready(db, point_id, actor, remote_requested=body.remote_requested, window_note=body.window_note)
-    return views.point_detail(db, point_id, actor)
+    return views.point_detail(db, point_id)
 
 
 @app.post("/api/points/{point_id}/request")
@@ -330,16 +330,31 @@ def request_comment(
     return {"id": comment.id, "author": actor.name, "body": comment.body}
 
 
+@app.post("/api/points/{point_id}/executive-approval")
+def executive_approval(
+    point_id: int,
+    body: ApprovalNoteIn,
+    actor: User = Depends(current_user),
+    db: Session = Depends(db_of),
+):
+    point, offers = engine.approve_inspection_as_executive(db, point_id, actor, body.note)
+    return {
+        "request_status": point.request_status,
+        "message": point.request_note,
+        "offers": len(offers),
+    }
+
+
 @app.post("/api/points/{point_id}/broadcast")
 def broadcast(point_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.broadcast(db, point_id, actor)
-    return views.point_detail(db, point_id, actor)
+    return views.point_detail(db, point_id)
 
 
 @app.post("/api/points/{point_id}/force")
 def force(point_id: int, body: ForceIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.force_assign(db, point_id, body.inspector_id, actor, body.reason)
-    return views.point_detail(db, point_id, actor)
+    return views.point_detail(db, point_id)
 
 
 @app.get("/api/offers/inbox")
@@ -378,25 +393,25 @@ def en_route(visit_id: int, actor: User = Depends(current_user), db: Session = D
 @app.post("/api/visits/{visit_id}/arrive")
 def arrive(visit_id: int, body: ArriveIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.mark_arrived(db, visit_id, actor, body.lat, body.lng)
-    return views.visit_ivr(db, visit_id, actor)
+    return views.visit_ivr(db, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/remote")
 def remote(visit_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.start_remote(db, visit_id, actor)
-    return views.visit_ivr(db, visit_id, actor)
+    return views.visit_ivr(db, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/location")
 def confirm_location(visit_id: int, body: LocationIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.confirm_remote_location(db, visit_id, actor, body.lat, body.lng)
-    return views.visit_ivr(db, visit_id, actor)
+    return views.visit_ivr(db, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/checklist")
 def checklist(visit_id: int, body: ChecklistIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.save_checklist(db, visit_id, actor, [item.model_dump() for item in body.answers])
-    return views.visit_ivr(db, visit_id, actor)
+    return views.visit_ivr(db, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/evidence")
@@ -518,14 +533,14 @@ def report_comment(
 
 @app.get("/api/map")
 def map_data(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "دسترسی نقشه بازرسان برای این نقش فعال نیست.", 403)
     return views.map_payload(db)
 
 
 @app.get("/api/inspectors")
 def inspectors(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "فهرست بازرسان برای این نقش فعال نیست.", 403)
     return views.inspectors_public(db)
 
@@ -638,11 +653,6 @@ def report_inbox(actor: User = Depends(current_user), db: Session = Depends(db_o
     return views.manager_inbox(db, actor)
 
 
-@app.get("/api/reports/unit")
-def unit_report_inbox(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    return views.unit_report_inbox(db, actor)
-
-
 @app.get("/api/reports/client")
 def client_reports(actor: User = Depends(current_user), db: Session = Depends(db_of)):
     return views.client_inbox(db, actor)
@@ -697,13 +707,13 @@ def ledger(actor: User = Depends(current_user), db: Session = Depends(db_of)):
 
 @app.get("/api/benchmark")
 def benchmark(actor: User = Depends(current_user)):
-    if actor.role not in {"manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "بنچ‌مارک برای این نقش فعال نیست.", 403)
     return benchmark_payload()
 
 
 @app.get("/api/technology")
 def technology(actor: User = Depends(current_user)):
-    if actor.role not in {"manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "این بخش برای این نقش فعال نیست.", 403)
     return technology_payload()

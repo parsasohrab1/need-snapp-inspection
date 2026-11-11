@@ -378,11 +378,13 @@ def approve_inspection_as_unit_manager(
         point.request_note = f"{equipment.tag} — {point.title}: بازرس واجد شرایط آنلاین نیست."
         project, _order = _project_contacts(session, point)
         _notify_role(session, "manager", "درخواست تأیید شد؛ بازرس آنلاین نیست", point.request_note, company_id=project.buyer_company_id)
+        _notify_role(session, "executive_manager", "درخواست تأیید شد؛ بازرس آنلاین نیست", point.request_note)
         notify(session, actor.id, "درخواست تأیید شد؛ بازرس آنلاین نیست", point.request_note)
         return point, []
     project, _order = _project_contacts(session, point)
     dispatch_message = f"{equipment.tag} — {point.title} — پیشنهاد بازرسی برای {len(offers)} بازرس ارسال شد."
     _notify_role(session, "manager", "درخواست IN وارد مرحله اعزام شد", dispatch_message, company_id=project.buyer_company_id)
+    _notify_role(session, "executive_manager", "درخواست IN وارد مرحله اعزام شد", dispatch_message)
     notify(session, actor.id, "درخواست IN وارد مرحله اعزام شد", dispatch_message)
     return point, offers
 
@@ -433,6 +435,11 @@ def return_inspection_request(session: Session, point_id: int, actor: User, reas
         point.request_status = "unit_review"
         recipients = [unit_manager] if unit_manager else []
         audit_action = "request_returned_to_unit_manager"
+    elif point.request_status == "executive_review":
+        _require(actor, {"executive_manager", "admin"})
+        point.request_status = "manager_review"
+        recipients = list(session.scalars(select(User).where(User.role == "manager", User.company_id == project.buyer_company_id)).all())
+        audit_action = "request_returned_to_project_manager"
     else:
         raise DomainError("illegal_transition", "درخواست در وضعیت قابل مرجوع کردن نیست.", 409)
     point.request_note = text
@@ -449,7 +456,7 @@ def add_inspection_request_comment(session: Session, point_id: int, actor: User,
     project, order = _project_contacts(session, point)
     inspector = session.get(User, point.unit_manager_id) if point.unit_manager_id else None
     allowed = (
-        actor.role in {"admin", "coordinator"}
+        actor.role in {"admin", "coordinator", "executive_manager"}
         or actor.role == "unit_manager" and point.unit_manager_id == actor.id
         or actor.role in {"buyer", "manager"} and actor.company_id == project.buyer_company_id
         or actor.role == "vendor" and actor.company_id == order.vendor_company_id
@@ -487,13 +494,58 @@ def add_inspection_request_comment(session: Session, point_id: int, actor: User,
     return comment
 
 
+def approve_inspection_as_executive(
+    session: Session,
+    point_id: int,
+    actor: User,
+    note: str = "",
+) -> tuple[InspectionPoint, list[Offer]]:
+    _require(actor, {"executive_manager", "admin"})
+    point = _point(session, point_id)
+    if point.request_status != "executive_review":
+        raise DomainError("illegal_transition", "درخواست در مرحلهٔ بررسی مدیر اجرایی نیست.", 409)
+    equipment = _equipment(session, point.equipment_id)
+    missing = missing_docs(session, point)
+    if missing:
+        labels = [DOC_LABELS.get(kind, kind) for kind in missing]
+        message = f"{equipment.tag} — مدارک پیوست نشده: {'، '.join(labels)}"
+        point.request_status = "documents_missing"
+        point.request_note = message
+        project, order = _project_contacts(session, point)
+        _notify_role(session, "vendor", "درخواست بازرسی برگشت؛ مدرک ناقص", message, company_id=order.vendor_company_id)
+        _notify_role(session, "buyer", "مدرک بازرسی ناقص است", message, company_id=project.buyer_company_id)
+        audit(session, "point", point.id, "executive_returned_missing_docs", actor, message)
+        return point, []
+
+    point.request_status = "approved"
+    point.request_note = note.strip()
+    if point.status == "planned":
+        point.status = move_point("planned", "ready")
+    elif point.status not in {"ready", "offering"}:
+        raise DomainError("illegal_transition", "نقطهٔ بازرسی در وضعیت قابل اعزام نیست.", 409)
+    audit(session, "point", point.id, "executive_approved", actor, note.strip())
+    try:
+        offers = broadcast(session, point.id, actor)
+    except DomainError as exc:
+        if exc.code != "no_inspector":
+            raise
+        project, _order_row = _project_contacts(session, point)
+        message = f"{equipment.tag} — {point.title}: بازرس واجد شرایط آنلاین نیست."
+        point.request_status = "approved_no_inspector"
+        point.request_note = message
+        _notify_role(session, "coordinator", "تأیید شد؛ بازرس آنلاین نیست", message)
+        _notify_role(session, "manager", "تأیید شد؛ بازرس آنلاین نیست", message, company_id=project.buyer_company_id)
+        return point, []
+    return point, offers
+
+
 def add_report_comment(session: Session, visit_id: int, actor: User, body: str) -> ReportComment:
     visit = _visit(session, visit_id)
     point = _point(session, visit.point_id)
     inspector = session.scalar(select(Inspector).where(Inspector.id == visit.inspector_id))
     project, order = _project_contacts(session, point)
     allowed = (
-        actor.role in {"admin", "coordinator"}
+        actor.role in {"admin", "coordinator", "executive_manager"}
         or (actor.role == "manager" and actor.company_id == project.buyer_company_id)
         or (actor.role == "buyer" and actor.company_id == project.buyer_company_id)
         or (actor.role == "vendor" and actor.company_id == order.vendor_company_id)
@@ -517,6 +569,8 @@ def add_report_comment(session: Session, visit_id: int, actor: User, body: str) 
     participants.update(
         session.scalars(select(User.id).where(User.company_id == order.vendor_company_id, User.role == "vendor")).all()
     )
+    if point.unit_manager_id:
+        participants.add(point.unit_manager_id)
     equipment = _equipment(session, point.equipment_id)
     for user_id in participants - {actor.id}:
         notify(session, user_id, "نظر تازه روی گزارش بازرسی", f"{equipment.tag} — {visit.ivr_no or point.title}: {actor.name} نظر ثبت کرد.")
@@ -579,7 +633,6 @@ def broadcast(
     fee, commission, net = quote(point.point_type, point.discipline, remote)
     created: list[Offer] = []
     for item in chosen:
-        travel_irr = 0 if remote else round(item.distance_km * 12_000)
         offer = Offer(
             point_id=point.id,
             inspector_id=item.inspector_id,
@@ -588,8 +641,8 @@ def broadcast(
             distance_km=item.distance_km,
             fee_irr=fee,
             commission_irr=commission,
-            net_irr=net + travel_irr,
-            travel_irr=travel_irr,
+            net_irr=net,
+            travel_irr=round(item.distance_km * 12_000),
             created_at=now,
             expires_at=now + timedelta(seconds=ttl_seconds),
         )
@@ -666,6 +719,7 @@ def accept_offer(session: Session, offer_id: int, actor: User, *, now: datetime 
     inspector_user = session.get(User, actor.id)
     dispatch_message = f"{equipment.tag} — {point.title} — {inspector_user.name if inspector_user else 'بازرس'} پیشنهاد را پذیرفت."
     _notify_role(session, "manager", "بازرس برای درخواست IN انتخاب شد", dispatch_message, company_id=project.buyer_company_id)
+    _notify_role(session, "executive_manager", "بازرس برای درخواست IN انتخاب شد", dispatch_message)
     unit_manager = session.get(User, point.unit_manager_id) if point.unit_manager_id else None
     if unit_manager:
         notify(session, unit_manager.id, "بازرس برای درخواست IN انتخاب شد", dispatch_message)
@@ -769,7 +823,6 @@ def force_assign(session: Session, point_id: int, inspector_id: int, actor: User
         raise DomainError("out_of_radius", "بازرس خارج از شعاع کارگاه است. اعزام خودکار او را انتخاب نمی‌کند.", 409)
     now = utcnow()
     fee, commission, net = quote(point.point_type, point.discipline, remote)
-    travel_irr = 0 if remote else round(distance * 12_000)
     offer = Offer(
         point_id=point.id,
         inspector_id=inspector.id,
@@ -778,8 +831,7 @@ def force_assign(session: Session, point_id: int, inspector_id: int, actor: User
         distance_km=round(distance, 2),
         fee_irr=fee,
         commission_irr=commission,
-        net_irr=net + travel_irr,
-        travel_irr=travel_irr,
+        net_irr=net,
         created_at=now,
         expires_at=now,
         decided_at=now,
@@ -984,6 +1036,8 @@ def submit_visit(session: Session, visit_id: int, actor: User, result: str, note
         raise DomainError("remote_note", "بازبینی از راه دور شرح حداقل ده‌حرفی می‌خواهد.", 400)
     point.status = move_point("on_site", "submitted")
     visit.phase = "submitted"
+    visit.report_stage = "unit_review"
+    visit.review_note = ""
     visit.result = result
     visit.note = note.strip()
     visit.submitted_at = utcnow()
@@ -1009,22 +1063,16 @@ def _notify_users(session: Session, users: list[User], title: str, body: str) ->
 
 
 def _notify_project_managers(session: Session, point: InspectionPoint, visit: Visit, actor: User) -> None:
-    """گزارش پس از بررسی هماهنگ‌کننده در کارتابل کارفرما قرار می‌گیرد."""
+    """گزارش ثبت‌شده را برای مدیر واحدِ مسئول ارسال می‌کند."""
     equipment = _equipment(session, point.equipment_id)
-    project = _project_of(session, point)
-    managers = list(session.scalars(select(User).where(User.role.in_(("coordinator", "admin")))).all())
-    if project is not None:
-        managers.extend(
-            session.scalars(
-                select(User).where(User.role == "manager", User.company_id == project.buyer_company_id)
-            ).all()
-        )
+    manager = session.get(User, point.unit_manager_id) if point.unit_manager_id else None
     inspector = session.get(Inspector, visit.inspector_id)
     inspector_user = session.get(User, inspector.user_id) if inspector else None
     verdict = "قبول" if visit.result == "accept" else "رد"
     who = inspector_user.name if inspector_user else actor.name
     body = f"{visit.ivr_no} — {equipment.tag} — {point.title} — {who} — {verdict}"
-    _notify_users(session, managers, "گزارش بازرسی ثبت شد", body)
+    if manager is not None:
+        notify(session, manager.id, "گزارش بازرسی نیازمند بررسی مدیر واحد", body)
 
 
 def _notify_client(session: Session, point: InspectionPoint, visit: Visit) -> None:
@@ -1035,8 +1083,8 @@ def _notify_client(session: Session, point: InspectionPoint, visit: Visit) -> No
     buyers = session.scalars(
         select(User).where(User.role == "buyer", User.company_id == project.buyer_company_id)
     ).all()
-    body = f"{visit.ivr_no} — {equipment.tag} — {point.title} — تأیید هماهنگ‌کننده"
-    _notify_users(session, list(buyers), "گزارش تأییدشده در کارتابل نشست", body)
+    body = f"{visit.ivr_no} — {equipment.tag} — {point.title} — تأیید مدیر پروژه"
+    _notify_users(session, list(buyers), "گزارش تأییدشده در کارتابل کارفرما", body)
 
 
 def _notify_return(session: Session, point: InspectionPoint, visit: Visit) -> None:
@@ -1052,30 +1100,18 @@ def _notify_return(session: Session, point: InspectionPoint, visit: Visit) -> No
     )
 
 
-def review_visit(session: Session, visit_id: int, actor: User, decision: str, note: str = "") -> Visit:
-    _require(actor, PM_ROLES | {"unit_manager"})
+def _legacy_review_visit(session: Session, visit_id: int, actor: User, decision: str) -> Visit:
+    _require(actor, PM_ROLES)
     visit = _visit(session, visit_id)
     point = _point(session, visit.point_id)
     if actor.role == "manager":
         buyer_sees(session, actor, point)
-    if actor.role == "unit_manager" and (visit.phase != "unit_review" or point.unit_manager_id != actor.id):
-        raise DomainError("forbidden", "این گزارش برای واحد شما ارجاع نشده است.", 403)
-    if visit.phase not in {"submitted", "unit_review"} or point.status != "submitted":
-        raise DomainError("illegal_transition", "گزارش در کارتابل قابل بازبینی نیست.", 409)
-    if actor.role == "manager" and visit.phase != "submitted":
-        raise DomainError("illegal_transition", "گزارش ابتدا باید در کارتابل مدیر واحد بررسی شود.", 409)
-    if actor.role == "unit_manager" and visit.phase != "unit_review":
-        raise DomainError("illegal_transition", "گزارش در کارتابل مدیر واحد نیست.", 409)
+    if visit.phase != "submitted" or point.status != "submitted":
+        raise DomainError("illegal_transition", "فقط گزارش ارسال‌شده بازبینی می‌شود.", 409)
     now = utcnow()
     if decision in {"approve", "accept"}:
         if visit.result != "accept":
             raise DomainError("result_conflict", "گزارش مردود را نمی‌توان تأیید کرد. باید برگردد.", 409)
-        if visit.phase == "submitted" and point.unit_manager_id is not None:
-            visit.phase = "unit_review"
-            visit.reviewed_at = now
-            notify(session, point.unit_manager_id, "گزارش بازرسی برای تأیید رسید", f"{visit.ivr_no} — {point.title}")
-            audit(session, "visit", visit.id, "project_manager_approve", actor, visit.ivr_no)
-            return visit
         point.status = move_point("submitted", "accepted")
         point.ncr_open = False
         visit.phase = "client"
@@ -1089,7 +1125,6 @@ def review_visit(session: Session, visit_id: int, actor: User, decision: str, no
                     fee_irr=offer.fee_irr,
                     commission_irr=offer.commission_irr,
                     net_irr=offer.net_irr,
-                    travel_irr=offer.travel_irr,
                 )
             )
         audit(session, "visit", visit.id, "review_accept", actor, visit.ivr_no)
@@ -1097,36 +1132,102 @@ def review_visit(session: Session, visit_id: int, actor: User, decision: str, no
     elif decision in {"return", "confirm_ncr"}:
         if decision == "confirm_ncr" and visit.result != "reject":
             raise DomainError("result_conflict", "فقط گزارش مردود به عدم انطباق تبدیل می‌شود.", 409)
-        text = note.strip()
-        if visit.phase == "unit_review":
-            if len(text) < 3 or len(text) > 2000:
-                raise DomainError("review_note_required", "برای مرجوعی به مدیر پروژه، دلیل ۳ تا ۲۰۰۰ نویسه‌ای لازم است.", 400)
-            visit.phase = "submitted"
-            visit.reviewed_at = now
-            session.add(ReportComment(visit_id=visit.id, user_id=actor.id, body=text))
-            project = _project_of(session, point)
-            if project:
-                _notify_role(session, "manager", "گزارش برای اصلاح نظر مدیر واحد را گرفت", f"{visit.ivr_no} — {text}", company_id=project.buyer_company_id)
-            audit(session, "visit", visit.id, "unit_manager_return", actor, text)
-        else:
-            if decision == "return" and (len(text) < 3 or len(text) > 2000):
-                raise DomainError("review_note_required", "برای مرجوعی گزارش، دلیل ۳ تا ۲۰۰۰ نویسه‌ای لازم است.", 400)
-            point.status = move_point("submitted", "ready")
-            point.ncr_open = True
-            point.remote_requested = False
-            visit.phase = "closed"
-            visit.reviewed_at = now
-            if text:
-                session.add(ReportComment(visit_id=visit.id, user_id=actor.id, body=text))
-            audit(session, "visit", visit.id, "ncr" if decision == "confirm_ncr" else "return", actor, text or visit.note)
-            _notify_return(session, point, visit)
+        point.status = move_point("submitted", "ready")
+        point.ncr_open = True
+        point.remote_requested = False
+        visit.phase = "closed"
+        visit.reviewed_at = now
+        audit(session, "visit", visit.id, "ncr" if decision == "confirm_ncr" else "return", actor, visit.note)
+        _notify_return(session, point, visit)
     else:
         raise DomainError("bad_decision", "تصمیم بازبینی تأیید یا برگرداندن به‌خاطر مغایرت است.", 400)
     return visit
 
 
+def review_visit(session: Session, visit_id: int, actor: User, decision: str, note: str = "") -> Visit:
+    _require(actor, {"manager", "unit_manager", "admin"})
+    visit = _visit(session, visit_id)
+    point = _point(session, visit.point_id)
+    project, _order_row = _project_contacts(session, point)
+    stage_roles = {
+        "unit_review": {"unit_manager", "admin"},
+        "manager_review": {"manager", "admin"},
+    }
+    if actor.role not in stage_roles.get(visit.report_stage, set()):
+        raise DomainError("illegal_transition", "گزارش در کارتابل این نقش نیست.", 409)
+    if actor.role == "unit_manager" and point.unit_manager_id != actor.id:
+        raise DomainError("forbidden", "این گزارش به واحد شما ارجاع نشده است.", 403)
+    if actor.role == "manager" and actor.company_id != project.buyer_company_id:
+        raise DomainError("forbidden", "این گزارش برای پروژهٔ شما نیست.", 403)
+    if visit.phase != "submitted":
+        raise DomainError("illegal_transition", "گزارش ارسال‌شده برای بازبینی در دسترس نیست.", 409)
+    text = note.strip()
+    if decision == "return" and not 3 <= len(text) <= 2000:
+        raise DomainError("return_reason_required", "برای مرجوع کردن گزارش، دلیل ۳ تا ۲۰۰۰ نویسه‌ای لازم است.", 400)
+    if len(text) > 2000:
+        raise DomainError("bad_note", "یادداشت بیش از حد طولانی است.", 400)
+    now = utcnow()
+    if decision in {"approve", "accept"}:
+        if visit.result != "accept":
+            raise DomainError("result_conflict", "گزارش مردود را نمی‌توان تأیید کرد. باید برگردد.", 409)
+        if visit.report_stage == "unit_review":
+            visit.report_stage = "manager_review"
+            managers = session.scalars(
+                select(User).where(User.role == "manager", User.company_id == project.buyer_company_id)
+            ).all()
+            equipment = _equipment(session, point.equipment_id)
+            _notify_users(
+                session,
+                list(managers),
+                "گزارش بازرسی نیازمند تأیید مدیر پروژه",
+                f"{visit.ivr_no} — {equipment.tag} — {point.title}",
+            )
+            audit(session, "visit", visit.id, "unit_review_approved", actor, text or visit.ivr_no)
+        else:
+            visit.report_stage = "client_review"
+            visit.phase = "client"
+            visit.reviewed_at = now
+            point.ncr_open = False
+            offer = session.get(Offer, visit.offer_id) if visit.offer_id else None
+            if offer and session.scalar(select(Ledger.id).where(Ledger.visit_id == visit.id)) is None:
+                session.add(
+                    Ledger(
+                        visit_id=visit.id,
+                        inspector_id=visit.inspector_id,
+                        fee_irr=offer.fee_irr,
+                        commission_irr=offer.commission_irr,
+                        net_irr=offer.net_irr + offer.travel_irr,
+                        travel_irr=offer.travel_irr,
+                    )
+                )
+            audit(session, "visit", visit.id, "project_review_approved", actor, text or visit.ivr_no)
+            _notify_client(session, point, visit)
+    elif decision == "return":
+        visit.review_note = text
+        if visit.report_stage == "unit_review":
+            point.status = move_point("submitted", "on_site")
+            visit.phase = "on_site"
+            visit.report_stage = "inspector_revision"
+            inspector = session.get(Inspector, visit.inspector_id)
+            if inspector is not None:
+                notify(session, inspector.user_id, "گزارش برای اصلاح برگشت", f"{visit.ivr_no} — {text}")
+            audit(session, "visit", visit.id, "unit_returned_to_inspector", actor, text)
+        else:
+            visit.report_stage = "unit_review"
+            manager = session.get(User, point.unit_manager_id) if point.unit_manager_id else None
+            if manager is not None:
+                notify(session, manager.id, "گزارش برای بررسی مجدد مدیر واحد برگشت", f"{visit.ivr_no} — {text}")
+            audit(session, "visit", visit.id, "project_returned_to_unit_manager", actor, text)
+        visit.reviewed_at = now
+    else:
+        raise DomainError("bad_decision", "تصمیم بازبینی باید تأیید یا مرجوعی باشد.", 400)
+    return visit
+
+
 def issue_bill(session: Session, visit: Visit) -> Bill:
     """صورت‌وضعیت و فاکتور تأیید نهایی. اگر قبلاً صادر شده باشد همان را برمی‌گرداند."""
+    if visit.phase != "confirmed":
+        raise DomainError("illegal_transition", "صورتحساب فقط پس از تأیید کارفرما صادر می‌شود.", 409)
     found = session.scalar(select(Bill).where(Bill.visit_id == visit.id))
     if found is not None:
         return found
@@ -1193,13 +1294,14 @@ def update_bill_accounting_status(session: Session, bill_id: int, actor: User, s
     point = _point(session, visit.point_id)
     project, _order_row = _project_contacts(session, point)
     status_label = {
-        "issued": "صادر؛ ارسال‌نشده",
-        "sent_to_accounting": "ارسال به ذی‌حسابی",
+        "issued": "ارسال نشده به ذی‌حسابی",
+        "sent_to_accounting": "ارسال شده به ذی‌حسابی",
         "returned": "مرجوع‌شده",
         "overdue": "معوقه",
     }[status]
     message = f"{bill.statement_no} — {status_label}" + (f" — {text}" if text else "")
     _notify_role(session, "manager", "وضعیت صورت‌وضعیت تغییر کرد", message, company_id=project.buyer_company_id)
+    _notify_role(session, "buyer", "وضعیت صورت‌حساب تغییر کرد", message, company_id=project.buyer_company_id)
     return bill
 
 
@@ -1246,12 +1348,17 @@ def confirm_by_client(session: Session, visit_id: int, actor: User) -> Visit:
     point = _point(session, visit.point_id)
     if actor.role == "buyer":
         buyer_sees(session, actor, point)
-    if visit.phase != "client" or point.status != "accepted":
-        raise DomainError("illegal_transition", "فقط گزارش تأییدشدهٔ هماهنگ‌کننده را کارفرما تأیید می‌کند.", 409)
+    if visit.phase != "client" or visit.report_stage != "client_review":
+        raise DomainError("illegal_transition", "فقط گزارش تأییدشدهٔ مدیر پروژه در کارتابل کارفرما تأیید می‌شود.", 409)
     if visit.result != "accept":
         raise DomainError("result_conflict", "کارفرما فقط گزارش قبول را تأیید می‌کند.", 409)
     now = utcnow()
+    if point.status == "submitted":
+        point.status = move_point("submitted", "accepted")
+    elif point.status != "accepted":
+        raise DomainError("illegal_transition", "وضعیت نقطه برای تأیید کارفرما معتبر نیست.", 409)
     visit.phase = "confirmed"
+    visit.report_stage = "confirmed"
     visit.client_approved_at = now
     audit(session, "visit", visit.id, "client_confirm", actor, visit.ivr_no)
     inspector = session.get(Inspector, visit.inspector_id)
@@ -1277,18 +1384,19 @@ def reject_by_client(session: Session, visit_id: int, actor: User, reason: str) 
     text = reason.strip()
     if len(text) < 3 or len(text) > 2000:
         raise DomainError("client_rejection_reason_required", "دلیل رد باید بین ۳ تا ۲۰۰۰ نویسه باشد.", 400)
-    if visit.phase != "client" or point.status != "accepted" or visit.result != "accept":
-        raise DomainError("illegal_transition", "فقط گزارش تأییدشدهٔ هماهنگ‌کننده در کارتابل کارفرما قابل رد است.", 409)
-    point.status = move_point("accepted", "submitted")
-    point.ncr_open = True
+    if visit.phase != "client" or visit.report_stage != "client_review" or visit.result != "accept":
+        raise DomainError("illegal_transition", "فقط گزارش تأییدشدهٔ مدیر پروژه در کارتابل کارفرما قابل مرجوعی است.", 409)
+    if point.status == "accepted":
+        point.status = move_point("accepted", "submitted")
     visit.phase = "submitted"
+    visit.report_stage = "manager_review"
+    visit.review_note = text
     visit.client_rejection_note = text
     visit.reviewed_at = utcnow()
-    session.add(ReportComment(visit_id=visit.id, user_id=actor.id, body=text))
     project = _project_of(session, point)
     message = f"{visit.ivr_no} — {point.title} — رد کارفرما: {text}"
     if project:
-        _notify_role(session, "manager", "گزارش بازرسی برای اصلاح برگشت", message, company_id=project.buyer_company_id)
+        _notify_role(session, "manager", "گزارش بازرسی برای بررسی مجدد برگشت", message, company_id=project.buyer_company_id)
     audit(session, "visit", visit.id, "client_reject", actor, text)
     return visit
 

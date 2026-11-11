@@ -11,11 +11,12 @@ from app.models import Equipment, FormSheet, InspectionPoint, Project, PurchaseO
 def _require_form_access(actor: User, kind: str) -> None:
     if kind not in known_kinds():
         raise DomainError("unknown_form", "این فرم تعریف نشده است.", 404)
+    if actor.role == "executive_manager":
+        return
     if kind == "in" and actor.role == "buyer":
         return
-    if kind == "ivr" and actor.role in {"inspector", "manager", "unit_manager", "coordinator", "admin", "buyer"}:
-        return
-    raise DomainError("forbidden", "برای این نقش دسترسی به فرم وجود ندارد.", 403)
+    if kind != "ivr":
+        raise DomainError("forbidden", "دسترسی کامل و مدیریت همهٔ فرم‌ها فقط برای مدیر اجرایی است.", 403)
 
 
 def blank_template(kind: str, actor: User) -> dict:
@@ -29,8 +30,9 @@ def list_sheets(session: Session, actor: User, kind: str | None = None) -> list[
     query = select(FormSheet).order_by(FormSheet.id.desc())
     if kind:
         query = query.where(FormSheet.kind == kind)
-    allowed_kinds = ["ivr", "in"] if actor.role == "buyer" else ["ivr"]
-    query = query.where(FormSheet.created_by == actor.id, FormSheet.kind.in_(allowed_kinds))
+    if actor.role != "executive_manager":
+        allowed_kinds = ["ivr", "in"] if actor.role == "buyer" else ["ivr"]
+        query = query.where(FormSheet.created_by == actor.id, FormSheet.kind.in_(allowed_kinds))
     rows = []
     for sheet in session.scalars(query).all():
         payload = json.loads(sheet.payload_json)
@@ -69,8 +71,8 @@ def get_sheet(session: Session, actor: User, sheet_id: int) -> dict:
         body["payload"] = json.loads(sheet.payload_json)
         return body
     _require_form_access(actor, sheet.kind)
-    if sheet.created_by != actor.id:
-        raise DomainError("forbidden", "فقط سازندهٔ فرم به آن دسترسی دارد.", 403)
+    if actor.role != "executive_manager" and sheet.created_by != actor.id:
+        raise DomainError("forbidden", "فقط مدیر اجرایی یا سازندهٔ فرم به آن دسترسی دارد.", 403)
     body = template(sheet.kind)
     body["id"] = sheet.id
     body["payload"] = json.loads(sheet.payload_json)
@@ -86,8 +88,8 @@ def save_sheet(session: Session, actor: User, kind: str, payload: dict, sheet_id
         sheet = session.get(FormSheet, sheet_id)
         if sheet is None or sheet.kind != kind:
             raise DomainError("not_found", "فرم پیدا نشد.", 404)
-        if sheet.created_by != actor.id:
-            raise DomainError("forbidden", "فقط سازندهٔ فرم می‌تواند آن را ویرایش کند.", 403)
+        if actor.role != "executive_manager" and sheet.created_by != actor.id:
+            raise DomainError("forbidden", "فقط مدیر اجرایی یا سازندهٔ فرم می‌تواند آن را ویرایش کند.", 403)
         sheet.payload_json = encoded
         sheet.updated_at = now
     else:

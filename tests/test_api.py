@@ -99,14 +99,15 @@ def test_uploaded_documents_are_downloadable_in_project_archive(tmp_path, monkey
         assert archived_document["download_url"] == f"/api/documents/{document_id}/file"
 
 
-def test_project_manager_role_is_available_and_executive_account_is_removed():
+def test_project_manager_and_executive_manager_have_distinct_roles():
     with TestClient(app) as client:
         response = client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
         assert response.status_code == 200
         assert response.json()["role"] == "manager"
         assert "مدیر پروژه" in response.json()["name"]
-        removed = client.post("/api/auth/login", json={"username": "executive", "password": "demo1234"})
-        assert removed.status_code == 401
+        executive = client.post("/api/auth/login", json={"username": "executive", "password": "demo1234"})
+        assert executive.status_code == 200
+        assert executive.json()["role"] == "executive_manager"
 
 
 def test_project_manager_desk_shows_only_operational_lists_and_accounting_status():
@@ -606,7 +607,7 @@ def test_client_approval_fills_inspector_record():
         rows = client.get("/api/inspector/record").json()
         match = next(row for row in rows if row["visit_id"] == report["visit_id"])
         assert match["company"] == "ماشین‌سازی البرز"
-        assert match["client"] == "پتروشیمی بندر امام"
+        assert match["client"] == "کارفرمای طرح فلامینگو"
         assert match["date"]
         assert match["time"]
         assert "تا" in match["window"]

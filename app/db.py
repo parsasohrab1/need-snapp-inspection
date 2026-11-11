@@ -83,6 +83,21 @@ def init_db() -> None:
         inspector_names = {row[1] for row in inspectors}
         if inspector_names and "engagement" not in inspector_names:
             conn.exec_driver_sql("ALTER TABLE inspectors ADD COLUMN engagement VARCHAR(16) NOT NULL DEFAULT 'fixed'")
+        visits = conn.exec_driver_sql("PRAGMA table_info(visits)").fetchall()
+        visit_names = {row[1] for row in visits}
+        if visit_names and "report_stage" not in visit_names:
+            conn.exec_driver_sql("ALTER TABLE visits ADD COLUMN report_stage VARCHAR(32) NOT NULL DEFAULT ''")
+        if visit_names and "review_note" not in visit_names:
+            conn.exec_driver_sql("ALTER TABLE visits ADD COLUMN review_note TEXT NOT NULL DEFAULT ''")
+        if visit_names:
+            conn.exec_driver_sql(
+                "UPDATE visits SET report_stage = CASE "
+                "WHEN phase = 'submitted' THEN 'unit_review' "
+                "WHEN phase = 'client' THEN 'client_review' "
+                "WHEN phase = 'confirmed' THEN 'confirmed' "
+                "ELSE report_stage END "
+                "WHERE report_stage = ''"
+            )
         offers = conn.exec_driver_sql("PRAGMA table_info(offers)").fetchall()
         offer_names = {row[1] for row in offers}
         if offer_names and "travel_irr" not in offer_names:
@@ -91,6 +106,20 @@ def init_db() -> None:
         ledger_names = {row[1] for row in ledger}
         if ledger_names and "travel_irr" not in ledger_names:
             conn.exec_driver_sql("ALTER TABLE ledger ADD COLUMN travel_irr INTEGER NOT NULL DEFAULT 0")
+        if conn.exec_driver_sql("PRAGMA table_info(users)").fetchall():
+            conn.exec_driver_sql(
+                "UPDATE users SET role = 'coordinator', name = 'هماهنگ‌کننده اعزام', username = 'coordinator.legacy' "
+                "WHERE role = 'executive_manager' AND username = 'executive' "
+                "AND NOT EXISTS (SELECT 1 FROM users WHERE username = 'coordinator.legacy')"
+            )
+            conn.exec_driver_sql(
+                "UPDATE users SET role = 'coordinator', name = 'هماهنگ‌کننده اعزام' "
+                "WHERE role = 'executive_manager'"
+            )
+        conn.exec_driver_sql(
+            "UPDATE inspection_points SET request_status = 'manager_review' "
+            "WHERE request_status = 'executive_review'"
+        )
         bills = conn.exec_driver_sql("PRAGMA table_info(bills)").fetchall()
         bill_names = {row[1] for row in bills}
         if bill_names and "accounting_status" not in bill_names:
