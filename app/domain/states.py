@@ -4,7 +4,6 @@ from app.domain.errors import DomainError
 
 
 # planned → ready → offering → assigned → en_route → on_site → submitted → accepted
-# submitted + عدم انطباق، نقطه را به ready برمی‌گرداند تا اعزام دوباره ممکن باشد.
 POINT_TRANSITIONS: dict[str, set[str]] = {
     "planned": {"ready"},
     "ready": {"offering", "assigned"},
@@ -12,7 +11,7 @@ POINT_TRANSITIONS: dict[str, set[str]] = {
     "assigned": {"en_route", "on_site"},
     "en_route": {"on_site"},
     "on_site": {"submitted"},
-    "submitted": {"accepted", "ready"},
+    "submitted": {"accepted", "ready", "on_site"},
     "accepted": {"ready", "submitted"},
 }
 

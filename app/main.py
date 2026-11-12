@@ -30,6 +30,7 @@ from app.schemas import (
     ReadyIn,
     ReviewIn,
     SubmitIn,
+    VisitInReportFormIn,
     ReportCommentIn,
     RequestCommentIn,
     RequestReturnIn,
@@ -46,6 +47,7 @@ from app.services.files import (
     document_path,
     photo_path,
     request_signature_path,
+    sniff_image,
     store_request_signature,
     store_evidence_attachment,
     store_document,
@@ -172,7 +174,7 @@ def unit_manager_dashboard(actor: User = Depends(current_user), db: Session = De
 
 @app.get("/api/unit-managers")
 def unit_managers(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "admin"}:
         raise DomainError("forbidden", "فقط مدیران می‌توانند مدیر واحد را انتخاب کنند.", 403)
     return [{"id": user.id, "name": user.name} for user in db.scalars(select(User).where(User.role == "unit_manager").order_by(User.name)).all()]
 
@@ -217,7 +219,7 @@ def request_approval_signature(
 @app.post("/api/points/{point_id}/ready")
 def ready(point_id: int, body: ReadyIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.mark_ready(db, point_id, actor, remote_requested=body.remote_requested, window_note=body.window_note)
-    return views.point_detail(db, point_id, actor)
+    return views.point_detail(db, point_id)
 
 
 @app.post("/api/points/{point_id}/request")
@@ -232,6 +234,26 @@ def request_inspection(
         in_payload["number"] = f"IN-{point_id}-{engine.utcnow():%Y%m%d%H%M%S}"
     if not str(in_payload.get("date", "")).strip():
         in_payload["date"] = engine.utcnow().strftime("%Y-%m-%d")
+    detail = views.point_detail(db, point_id, actor)
+    in_defaults = {
+        "customer_location": "iran",
+        "client": detail["companies"]["buyer"],
+        "project": detail["project"]["name"],
+        "po": detail["order"]["number"],
+        "contractor": detail["companies"]["vendor"],
+        "vendor": detail["companies"]["vendor"],
+        "manufacturer": detail["companies"]["vendor"],
+        "location": f"{detail['equipment']['workshop_name']}، {detail['equipment']['city']}",
+        "tag": detail["equipment"]["tag"],
+        "itp_item": str(detail["point"]["seq"]),
+        "discipline": detail["point"]["discipline_label"],
+        "reference": detail["point"]["standard_ref"],
+        "scope": detail["point"]["title"],
+        "category": "درخواست بازرسی",
+    }
+    for key, value in in_defaults.items():
+        if not str(in_payload.get(key, "")).strip():
+            in_payload[key] = value
     form_sheet = form_sheets.save_sheet(db, actor, "in", in_payload, None)
     point = engine.request_inspection(
         db,
@@ -330,16 +352,31 @@ def request_comment(
     return {"id": comment.id, "author": actor.name, "body": comment.body}
 
 
+@app.post("/api/points/{point_id}/executive-approval")
+def executive_approval(
+    point_id: int,
+    body: ApprovalNoteIn,
+    actor: User = Depends(current_user),
+    db: Session = Depends(db_of),
+):
+    point, offers = engine.approve_inspection_as_executive(db, point_id, actor, body.note)
+    return {
+        "request_status": point.request_status,
+        "message": point.request_note,
+        "offers": len(offers),
+    }
+
+
 @app.post("/api/points/{point_id}/broadcast")
 def broadcast(point_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.broadcast(db, point_id, actor)
-    return views.point_detail(db, point_id, actor)
+    return views.point_detail(db, point_id)
 
 
 @app.post("/api/points/{point_id}/force")
 def force(point_id: int, body: ForceIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.force_assign(db, point_id, body.inspector_id, actor, body.reason)
-    return views.point_detail(db, point_id, actor)
+    return views.point_detail(db, point_id)
 
 
 @app.get("/api/offers/inbox")
@@ -378,25 +415,25 @@ def en_route(visit_id: int, actor: User = Depends(current_user), db: Session = D
 @app.post("/api/visits/{visit_id}/arrive")
 def arrive(visit_id: int, body: ArriveIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.mark_arrived(db, visit_id, actor, body.lat, body.lng)
-    return views.visit_ivr(db, visit_id, actor)
+    return views.visit_ivr(db, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/remote")
 def remote(visit_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.start_remote(db, visit_id, actor)
-    return views.visit_ivr(db, visit_id, actor)
+    return views.visit_ivr(db, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/location")
 def confirm_location(visit_id: int, body: LocationIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.confirm_remote_location(db, visit_id, actor, body.lat, body.lng)
-    return views.visit_ivr(db, visit_id, actor)
+    return views.visit_ivr(db, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/checklist")
 def checklist(visit_id: int, body: ChecklistIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.save_checklist(db, visit_id, actor, [item.model_dump() for item in body.answers])
-    return views.visit_ivr(db, visit_id, actor)
+    return views.visit_ivr(db, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/evidence")
@@ -438,8 +475,14 @@ async def upload_visit_attachment(
     filename = Path(file.filename or "").name
     if not filename:
         raise HTTPException(status_code=400, detail="نام فایل معتبر نیست")
+    max_bytes = MAX_REQUEST_SIGNATURE_BYTES if kind == "inspector_signature" else MAX_DOCUMENT_BYTES
+    raw = await file.read(max_bytes + 1)
+    if kind == "inspector_signature":
+        image_suffix = sniff_image(raw)
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp"} or (image_suffix != suffix and not (image_suffix == ".jpg" and suffix == ".jpeg")):
+            raise HTTPException(status_code=400, detail="مهر و امضای بازرس باید تصویر JPEG، PNG یا WebP باشد")
     row = engine.add_evidence(db, visit_id, actor, caption, lat, lng, kind=kind)
-    raw = await file.read(MAX_DOCUMENT_BYTES + 1)
     row.stored_name, row.media_type = store_evidence_attachment(raw, filename)
     row.filename = filename
     return {"id": row.id, "filename": row.filename, "media_type": row.media_type}
@@ -464,6 +507,25 @@ def evidence_file(evidence_id: int, actor: User = Depends(current_user), db: Ses
 def submit(visit_id: int, body: SubmitIn, actor: User = Depends(current_user), db: Session = Depends(db_of)):
     engine.submit_visit(db, visit_id, actor, body.result, body.note)
     return views.visit_ivr(db, visit_id, actor)
+
+
+@app.get("/api/visits/{visit_id}/in-report-form")
+def visit_in_report_form(visit_id: int, actor: User = Depends(current_user), db: Session = Depends(db_of)):
+    visit = db.get(Visit, visit_id)
+    if visit is None or not views.can_access_visit(db, actor, visit):
+        raise HTTPException(status_code=403, detail="به فرم گزارش این بازدید دسترسی ندارید")
+    return form_sheets.visit_report_form(db, actor, visit_id)
+
+
+@app.put("/api/visits/{visit_id}/in-report-form")
+def save_visit_in_report_form(
+    visit_id: int,
+    body: VisitInReportFormIn,
+    actor: User = Depends(current_user),
+    db: Session = Depends(db_of),
+):
+    form_sheets.save_visit_report_form(db, actor, visit_id, body.payload)
+    return form_sheets.visit_report_form(db, actor, visit_id)
 
 
 @app.post("/api/visits/{visit_id}/review")
@@ -518,14 +580,14 @@ def report_comment(
 
 @app.get("/api/map")
 def map_data(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "دسترسی نقشه بازرسان برای این نقش فعال نیست.", 403)
     return views.map_payload(db)
 
 
 @app.get("/api/inspectors")
 def inspectors(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    if actor.role not in {"manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "فهرست بازرسان برای این نقش فعال نیست.", 403)
     return views.inspectors_public(db)
 
@@ -638,11 +700,6 @@ def report_inbox(actor: User = Depends(current_user), db: Session = Depends(db_o
     return views.manager_inbox(db, actor)
 
 
-@app.get("/api/reports/unit")
-def unit_report_inbox(actor: User = Depends(current_user), db: Session = Depends(db_of)):
-    return views.unit_report_inbox(db, actor)
-
-
 @app.get("/api/reports/client")
 def client_reports(actor: User = Depends(current_user), db: Session = Depends(db_of)):
     return views.client_inbox(db, actor)
@@ -697,13 +754,13 @@ def ledger(actor: User = Depends(current_user), db: Session = Depends(db_of)):
 
 @app.get("/api/benchmark")
 def benchmark(actor: User = Depends(current_user)):
-    if actor.role not in {"manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "بنچ‌مارک برای این نقش فعال نیست.", 403)
     return benchmark_payload()
 
 
 @app.get("/api/technology")
 def technology(actor: User = Depends(current_user)):
-    if actor.role not in {"manager", "coordinator", "admin"}:
+    if actor.role not in {"manager", "executive_manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "این بخش برای این نقش فعال نیست.", 403)
     return technology_payload()

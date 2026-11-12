@@ -1,4 +1,4 @@
-"""داده‌های نمونه برای اجرای سامانه. گذرواژه همه حساب‌ها demo1234 است."""
+"""دنیای نمایشی طرح فلامینگو. گذرواژه همه حساب‌ها demo1234 است."""
 
 import json
 
@@ -13,6 +13,7 @@ from app.services.engine import (
     accept_offer,
     add_site_photos,
     broadcast,
+    confirm_by_client,
     confirm_remote_location,
     force_assign,
     mark_arrived,
@@ -27,12 +28,6 @@ from app.services.engine import (
 
 PASSWORD = "demo1234"
 HOURLY_INSPECTORS = {"inspector.kaveh", "inspector.payam", "inspector.nima"}
-BUYER_COMPANIES = (
-    "پتروشیمی بندر امام",
-    "پالایشگاه آبادان",
-    "پتروشیمی خارک",
-    "شرکت نفت ستاره",
-)
 
 INSPECTORS = [
     ("inspector.reza", "رضا نعمتی", "کرج", 35.762, 50.972, 50, True, 4.8, ["welding", "material"], ["AWS CWI"]),
@@ -89,7 +84,15 @@ def _finish_pass(session, point, visit, user: User) -> None:
     if point.point_type in {"H", "W"} and not visit.remote:
         add_site_photos(session, visit.id, user, visit.arrive_lat, visit.arrive_lng)
     note = "بازبینی مدارک از راه دور انجام شد و ردیابی پرونده برقرار است." if visit.remote else "بازدید حضوری مطابق ITP ثبت شد."
-    submit_visit(session, visit.id, user, "accept", note)
+    submit_visit(
+        session,
+        visit.id,
+        user,
+        "accept",
+        note,
+        require_signature=False,
+        require_in_report=False,
+    )
 
 
 def _open_visit(session, point, coordinator, vendor, *, remote: bool) -> tuple[InspectionPoint, object, User]:
@@ -111,9 +114,7 @@ def _open_visit(session, point, coordinator, vendor, *, remote: bool) -> tuple[I
 
 
 def seed_demo(session: Session) -> None:
-    buyer = Company(name=BUYER_COMPANIES[0], kind="buyer")
-    for company_name in BUYER_COMPANIES[1:]:
-        session.add(Company(name=company_name, kind="buyer"))
+    buyer = Company(name="کارفرمای طرح فلامینگو", kind="buyer")
     vendor_co = Company(name="ماشین‌سازی البرز", kind="vendor")
     session.add_all([buyer, vendor_co])
     session.flush()
@@ -124,6 +125,7 @@ def seed_demo(session: Session) -> None:
         User(username="buyer", name="نماینده کارفرما", role="buyer", phone="02100000002", password_hash=hash_password(PASSWORD), company_id=buyer.id),
         User(username="manager", name="مدیر پروژه", role="manager", phone="02100000004", password_hash=hash_password(PASSWORD), company_id=buyer.id),
         User(username="unit.manager", name="مدیر واحد بازرسی", role="unit_manager", phone="02100000006", password_hash=hash_password(PASSWORD)),
+        User(username="executive", name="مدیر اجرایی", role="executive_manager", phone="02100000005", password_hash=hash_password(PASSWORD)),
         User(username="vendor", name="نماینده سازنده", role="vendor", phone="02600000003", password_hash=hash_password(PASSWORD), company_id=vendor_co.id),
     ]
     for spec in INSPECTORS:
@@ -155,9 +157,9 @@ def seed_demo(session: Session) -> None:
     session.flush()
 
     project = Project(
-        code="NSI-1405-001",
+        code="FLM-1405",
         kind="project",
-        name="بازرسی خرید تجهیزات ثابت",
+        name="طرح فلامینگو — بازرسی خرید تجهیزات ثابت",
         buyer_company_id=buyer.id,
         description="بازرسی پروژه‌ای: اعزام بازرس شخص ثالث به کارگاه ساخت، روی ITP، با گزارش IVR و صورتجلسه.",
     )
@@ -166,7 +168,7 @@ def seed_demo(session: Session) -> None:
     order = PurchaseOrder(
         project_id=project.id,
         vendor_company_id=vendor_co.id,
-        number="PO-1405-014",
+        number="PO-FLM-014",
         title="ساخت مخزن، مبدل، اسپول و شاسی",
     )
     session.add(order)
@@ -250,12 +252,18 @@ def seed_demo(session: Session) -> None:
     ready_points = take("material", 1) + take("welding", 1) + take("ndt", 1) + take("coating", 1) + take("hydrotest", 1)
 
     manager = _user(session, "manager")
+    unit_manager = _user(session, "unit.manager")
+    buyer_user = _user(session, "buyer")
     for point in accepted:
+        point.unit_manager_id = unit_manager.id
         remote = point.discipline == "documentation" and point.remote_allowed
         _point, visit, user = _open_visit(session, point, coordinator, vendor, remote=remote)
         _finish_pass(session, point, visit, user)
+        review_visit(session, visit.id, unit_manager, "approve")
         review_visit(session, visit.id, manager, "approve")
+        confirm_by_client(session, visit.id, buyer_user)
 
+    ncr_point.unit_manager_id = unit_manager.id
     _point, visit, user = _open_visit(session, ncr_point, coordinator, vendor, remote=False)
     answers = []
     for index, item in enumerate(ncr_point.checklist):
@@ -265,11 +273,27 @@ def seed_demo(session: Session) -> None:
             answers.append({"item_id": item["id"], "value": "pass", "note": ""})
     save_checklist(session, visit.id, user, answers)
     add_site_photos(session, visit.id, user, visit.arrive_lat, visit.arrive_lng)
-    submit_visit(session, visit.id, user, "reject", "عدم انطباق جوش؛ تعمیر و بازرسی مجدد لازم است.")
-    review_visit(session, visit.id, manager, "return", "عدم انطباق ثبت‌شده؛ برای اصلاح به بازرس برگشت.")
+    submit_visit(
+        session,
+        visit.id,
+        user,
+        "reject",
+        "عدم انطباق جوش؛ تعمیر و بازرسی مجدد لازم است.",
+        require_signature=False,
+        require_in_report=False,
+    )
 
+    submitted.unit_manager_id = unit_manager.id
     _point, visit, user = _open_visit(session, submitted, coordinator, vendor, remote=False)
     _finish_pass(session, submitted, visit, user)
+    review_visit(session, visit.id, unit_manager, "approve")
+
+    unit_review_point = ready_points.pop(0)
+    unit_review_point.unit_manager_id = unit_manager.id
+    _point, unit_review_visit, unit_review_inspector = _open_visit(
+        session, unit_review_point, coordinator, vendor, remote=False
+    )
+    _finish_pass(session, unit_review_point, unit_review_visit, unit_review_inspector)
 
     hossein = session.scalar(select(User).where(User.username == "inspector.hossein"))
     hossein_inspector = session.scalar(select(Inspector).where(Inspector.user_id == hossein.id))
@@ -314,45 +338,32 @@ def ensure_engagement(session: Session) -> None:
 
 
 def ensure_project_manager(session: Session) -> None:
-    """Keep distinct workflow accounts for coordination, project and unit review."""
+    """Keep distinct workflow accounts for coordination, project review, and executive approval."""
     coordinator = session.scalar(select(User).where(User.username == "coordinator"))
     if coordinator is not None:
         coordinator.role = "coordinator"
         coordinator.name = "هماهنگ‌کننده اعزام"
-    buyer = session.scalar(select(Company).where(Company.name == BUYER_COMPANIES[0]))
-    if buyer is None:
-        buyer = session.scalar(select(Company).where(Company.kind == "buyer"))
-        if buyer is not None:
-            buyer.name = BUYER_COMPANIES[0]
-        else:
-            buyer = Company(name=BUYER_COMPANIES[0], kind="buyer")
-            session.add(buyer)
-            session.flush()
-    for company_name in BUYER_COMPANIES[1:]:
-        if session.scalar(select(Company.id).where(Company.name == company_name)) is None:
-            session.add(Company(name=company_name, kind="buyer"))
-    for project in session.scalars(select(Project)).all():
-        if project.code == "FLM-1405":
-            project.code = "NSI-1405-001"
-        if "فلامینگو" in project.name:
-            project.name = project.name.replace("طرح فلامینگو — ", "")
-    for order in session.scalars(select(PurchaseOrder)).all():
-        if order.number == "PO-FLM-014":
-            order.number = "PO-1405-014"
+    buyer = session.scalar(select(Company).where(Company.kind == "buyer"))
     legacy_account = session.scalar(select(User).where(User.username == "manager"))
     if legacy_account is not None:
         legacy_account.role = "manager"
         legacy_account.name = "مدیر پروژه"
         if buyer is not None:
             legacy_account.company_id = buyer.id
-    legacy_executive = session.scalar(select(User).where(User.username == "executive"))
-    if legacy_executive is not None:
-        legacy_executive.username = f"disabled.executive.{legacy_executive.id}"
-        legacy_executive.name = "حساب غیرفعال"
-        legacy_executive.role = "disabled"
-    session.query(InspectionPoint).filter(InspectionPoint.request_status == "executive_review").update(
-        {"request_status": "manager_review"}
-    )
+    executive = session.scalar(select(User).where(User.username == "executive"))
+    if executive is None:
+        session.add(
+            User(
+                username="executive",
+                name="مدیر اجرایی",
+                role="executive_manager",
+                phone="02100000005",
+                password_hash=hash_password(PASSWORD),
+            )
+        )
+    else:
+        executive.role = "executive_manager"
+        executive.name = "مدیر اجرایی"
     unit_manager = session.scalar(select(User).where(User.username == "unit.manager"))
     if unit_manager is None:
         session.add(

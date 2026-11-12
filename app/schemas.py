@@ -104,6 +104,10 @@ class FormIn(BaseModel):
     sheet_id: int | None = None
 
 
+class VisitInReportFormIn(BaseModel):
+    payload: dict = Field(default_factory=dict)
+
+
 class MomIn(BaseModel):
     title: str
     body: str = Field(min_length=10)

@@ -99,14 +99,15 @@ def test_uploaded_documents_are_downloadable_in_project_archive(tmp_path, monkey
         assert archived_document["download_url"] == f"/api/documents/{document_id}/file"
 
 
-def test_project_manager_role_is_available_and_executive_account_is_removed():
+def test_project_manager_and_executive_manager_have_distinct_roles():
     with TestClient(app) as client:
         response = client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
         assert response.status_code == 200
         assert response.json()["role"] == "manager"
         assert "مدیر پروژه" in response.json()["name"]
-        removed = client.post("/api/auth/login", json={"username": "executive", "password": "demo1234"})
-        assert removed.status_code == 401
+        executive = client.post("/api/auth/login", json={"username": "executive", "password": "demo1234"})
+        assert executive.status_code == 200
+        assert executive.json()["role"] == "executive_manager"
 
 
 def test_project_manager_desk_shows_only_operational_lists_and_accounting_status():
@@ -214,20 +215,72 @@ def test_blank_forms_start_empty_and_keep_filled_lines():
                 assert all(value == "" for row in body["payload"][table["key"]] for value in row.values())
         international = client.post(
             "/api/forms",
-            json={"kind": "in", "payload": {"customer_location": "international", "client": "Overseas client"}},
+            json={
+                "kind": "in",
+                "payload": {
+                    "customer_location": "international",
+                    "client": "Overseas client",
+                    "number": "IN-OVERSEAS-1",
+                    "date": "2026-11-11",
+                    "project": "Project A",
+                    "po": "PO-1",
+                    "location": "Workshop",
+                    "tag": "V-1",
+                    "itp_item": "1",
+                    "discipline": "mechanical",
+                    "reference": "ASME",
+                    "scope": "Material check",
+                    "category": "inspection",
+                    "reference_documents": [
+                        {"title": "ITP", "document_no": "DOC-001", "revision": "A"},
+                        {"title": "MTC", "document_no": "DOC-002", "revision": "B"},
+                    ],
+                    "materials": [
+                        {"item_no": "1", "material": "Class 300 Valve", "quantity": "5 pcs", "test_frequency": "Once per batch"},
+                    ],
+                    "items": [
+                        {"item": "Class 300 Valve", "unit": "each", "quantity": "5", "description": "Body material"},
+                    ],
+                },
+            },
         )
         assert international.status_code == 200
         international_form = client.get(f"/api/forms/{international.json()['id']}").json()
         assert international_form["payload"]["customer_location"] == "international"
         assert international_form["payload"]["client"] == "Overseas client"
-        saved = client.post("/api/forms", json={"kind": "itp", "payload": {"number": "ITP-1", "lines": [{"item": "1", "intervention": "H"}]}})
+        assert international_form["payload"]["reference_documents"][1]["document_no"] == "DOC-002"
+        assert international_form["payload"]["materials"][0]["test_frequency"] == "Once per batch"
+        assert international_form["payload"]["items"][0]["description"] == "Body material"
+        saved = client.post(
+            "/api/forms",
+            json={
+                "kind": "itp",
+                "payload": {
+                    "number": "ITP-1",
+                    "date": "2026-11-11",
+                    "client": "Client A",
+                    "vendor": "Vendor A",
+                    "project": "Project A",
+                    "po": "PO-1",
+                    "tag": "V-1",
+                    "code": "ASME",
+                    "lines": [{
+                        "item": "1",
+                        "activity": "Material check",
+                        "reference": "ASME",
+                        "criteria": "Approved",
+                        "intervention": "H",
+                    }],
+                },
+            },
+        )
         assert saved.status_code == 200
         stored = client.get(f"/api/forms/{saved.json()['id']}").json()
         assert stored["payload"]["number"] == "ITP-1"
         assert stored["payload"]["lines"][0]["item"] == "1"
         assert stored["payload"]["lines"][0]["intervention"] == "H"
         assert stored["payload"]["lines"][1]["activity"] == ""
-        assert stored["payload"]["client"] == ""
+        assert stored["payload"]["client"] == "Client A"
 
 
 def test_mobile_photos_of_item_place_and_marker():
@@ -273,10 +326,17 @@ def test_mobile_photos_of_item_place_and_marker():
             files={"file": ("inspection.mp4", b"\x00\x00\x00\x18ftypisom", "video/mp4")},
         )
         assert video.status_code == 200
+        signature = client.post(
+            f"/api/visits/{visit_id}/attachments",
+            data={"kind": "inspector_signature", "caption": "مهر و امضای بازرس"},
+            files={"file": ("inspector-signature.png", png, "image/png")},
+        )
+        assert signature.status_code == 200
         sent = client.post(f"/api/visits/{visit_id}/submit", json={"result": "accept", "note": "بازدید حضوری ثبت شد."})
         assert sent.status_code == 200
         report = client.get(f"/api/visits/{visit_id}/ivr").json()
-        assert {row["kind"] for row in report["photos"]} == {"item", "environment", "marker"}
+        assert report["visit"]["signature_uploaded"] is True
+        assert {row["kind"] for row in report["photos"]} == {"item", "environment", "marker", "inspector_signature"}
         video_row = next(row for row in report["photos"] if row["filename"] == "inspection.mp4")
         downloaded_video = client.get(video_row["url"])
         assert downloaded_video.status_code == 200
@@ -327,7 +387,7 @@ def test_project_manager_review_releases_or_returns_report():
         assert any(row["visit_id"] == report["visit_id"] for row in released)
         report_notification = next(
             row for row in client.get("/api/notifications").json()
-            if row["title"] == "گزارش تأییدشده در کارتابل نشست"
+            if row["title"] == "گزارش تأییدشده در کارتابل کارفرما"
         )
         assert report_notification["target"] == {"type": "ivr", "id": report["visit_id"]}
         client.post("/api/auth/login", json={"username": "vendor", "password": "demo1234"})
@@ -339,14 +399,114 @@ def test_project_manager_returns_report_when_discrepant():
     with TestClient(app) as client:
         client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
         report = client.get("/api/reports/inbox").json()[0]
-        returned = client.post(f"/api/visits/{report['visit_id']}/review", json={"decision": "return"})
+        returned = client.post(
+            f"/api/visits/{report['visit_id']}/review",
+            json={"decision": "return", "note": "مدارک گزارش باید توسط مدیر واحد دوباره بررسی شود"},
+        )
         assert returned.status_code == 200
+        assert returned.json()["visit"]["report_stage"] == "unit_review"
         detail = client.get(f"/api/points/{report['point_id']}").json()
-        assert detail["point"]["status"] == "ready"
-        assert detail["point"]["ncr_open"] is True
+        assert detail["point"]["status"] == "submitted"
+        client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+        assert any(row["visit_id"] == report["visit_id"] for row in client.get("/api/unit-manager/desk").json()["reports"])
         client.post("/api/auth/login", json={"username": "buyer", "password": "demo1234"})
         released = client.get("/api/reports/client").json()
         assert all(row["visit_id"] != report["visit_id"] for row in released)
+
+
+def test_report_pipeline_reaches_buyer_and_creates_invoice_only_after_confirmation():
+    reset_engine()
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+        report = next(
+            row for row in client.get("/api/unit-manager/desk").json()["reports"]
+            if row["result"] == "accept"
+        )
+        before = client.post(f"/api/visits/{report['visit_id']}/review", json={"decision": "approve"})
+        assert before.status_code == 200
+        assert before.json()["visit"]["report_stage"] == "manager_review"
+        client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
+        assert any(row["visit_id"] == report["visit_id"] for row in client.get("/api/reports/inbox").json())
+
+        manager_approved = client.post(
+            f"/api/visits/{report['visit_id']}/review",
+            json={"decision": "approve"},
+        )
+        assert manager_approved.status_code == 200
+        assert manager_approved.json()["visit"]["report_stage"] == "client_review"
+
+        client.post("/api/auth/login", json={"username": "buyer", "password": "demo1234"})
+        released = next(
+            row for row in client.get("/api/reports/client").json()
+            if row["visit_id"] == report["visit_id"]
+        )
+        assert released["evidence_count"] >= 0
+        assert released["document_count"] >= 0
+        ivr = client.get(f"/api/visits/{report['visit_id']}/ivr")
+        assert ivr.status_code == 200
+        report_detail = ivr.json()
+        assert report_detail["visit"]["report_stage"] == "client_review"
+        assert report_detail["answers"]
+        assert all("download_url" in document for document in report_detail["context"]["documents"])
+        assert all("url" in evidence for evidence in report_detail["photos"])
+        assert all(row["visit_id"] != report["visit_id"] for row in client.get("/api/bills").json())
+        confirmed = client.post(f"/api/visits/{report['visit_id']}/confirm")
+        assert confirmed.status_code == 200
+        assert confirmed.json()["visit"]["report_stage"] == "confirmed"
+        assert any(row["visit_id"] == report["visit_id"] for row in client.get("/api/bills").json())
+
+
+def test_unit_manager_returns_report_to_inspector_for_revision():
+    reset_engine()
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+        report = next(
+            row for row in client.get("/api/unit-manager/desk").json()["reports"]
+            if row["result"] == "reject"
+        )
+        returned = client.post(
+            f"/api/visits/{report['visit_id']}/review",
+            json={"decision": "return", "note": "پیوست‌های اصلاحی و نتیجه آزمون را تکمیل کنید"},
+        )
+        assert returned.status_code == 200
+        assert returned.json()["visit"]["phase"] == "on_site"
+        assert returned.json()["visit"]["report_stage"] == "inspector_revision"
+
+        active_visit = None
+        for username in (
+            "inspector.reza",
+            "inspector.maryam",
+            "inspector.hossein",
+            "inspector.sara",
+            "inspector.kaveh",
+            "inspector.elham",
+            "inspector.payam",
+            "inspector.nima",
+        ):
+            client.post("/api/auth/login", json={"username": username, "password": "demo1234"})
+            current = client.get("/api/visits/active").json()
+            if current and current["visit"]["id"] == report["visit_id"]:
+                active_visit = current
+                break
+        assert active_visit is not None
+        checklist = active_visit["context"]["point"]["checklist"]
+        answers = [{"item_id": row["id"], "value": "pass", "note": ""} for row in checklist]
+        assert client.post(
+            f"/api/visits/{report['visit_id']}/checklist",
+            json={"answers": answers},
+        ).status_code == 200
+        signature = client.post(
+            f"/api/visits/{report['visit_id']}/attachments",
+            data={"kind": "inspector_signature", "caption": "امضای بازرس برای ارسال مجدد"},
+            files={"file": ("inspector-signature.png", TEST_SIGNATURE_PNG, "image/png")},
+        )
+        assert signature.status_code == 200
+        resubmitted = client.post(
+            f"/api/visits/{report['visit_id']}/submit",
+            json={"result": "accept", "note": "موارد اصلاح شد و بازرسی دوباره انجام شد"},
+        )
+        assert resubmitted.status_code == 200
+        assert resubmitted.json()["visit"]["report_stage"] == "unit_review"
 
 
 def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp_path):
@@ -389,6 +549,8 @@ def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp
             client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
             manager_desk = client.get("/api/manager/desk").json()
             assert any(row["form_id"] == form_id for row in manager_desk["in_forms"])
+            received_form = next(row for row in manager_desk["in_forms"] if row["form_id"] == form_id)
+            assert received_form["request_status"] == "manager_review"
             viewed_in = client.get(f"/api/forms/{form_id}")
             assert viewed_in.status_code == 200
             assert viewed_in.json()["payload"]["number"] == "IN-TEST-1"
@@ -408,8 +570,13 @@ def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp
             )
             assert manager_approved.status_code == 200
             assert manager_approved.json()["request_status"] == "unit_review"
+            manager_sent = client.get("/api/manager/desk").json()["in_forms"]
+            sent_form = next(row for row in manager_sent if row["form_id"] == form_id)
+            assert sent_form["request_status"] == "unit_review"
 
             client.post("/api/auth/login", json={"username": "unit.manager", "password": "demo1234"})
+            unit_desk = client.get("/api/unit-manager/desk").json()
+            assert any(row["point_id"] == point["id"] for row in unit_desk["requests"])
             detail = client.get(f"/api/points/{point['id']}").json()
             approvals = detail["point"]["request_approvals"]
             assert len(approvals) == 1
@@ -424,9 +591,93 @@ def test_buyer_in_request_manager_unit_dispatch_and_form_access(monkeypatch, tmp
             )
             assert unit_approved.status_code == 200
             assert unit_approved.json()["request_status"] in {"inspection_queue", "approved_no_inspector"}
+            unit_sent = client.get("/api/unit-manager/desk").json()["sent_requests"]
+            sent_request = next(row for row in unit_sent if row["point_id"] == point["id"])
+            assert sent_request["request_status"] == unit_approved.json()["request_status"]
+            assert sent_request["request_form_id"] == form_id
             approvals = client.get(f"/api/points/{point['id']}").json()["point"]["request_approvals"]
             assert [approval["stage"] for approval in approvals] == ["manager", "unit_manager"]
             assert client.get(f"/api/points/{point['id']}").json()["point"]["request_form_id"] == form_id
+
+            inspector_accounts = (
+                "inspector.reza",
+                "inspector.maryam",
+                "inspector.hossein",
+                "inspector.sara",
+                "inspector.kaveh",
+                "inspector.elham",
+                "inspector.payam",
+                "inspector.nima",
+            )
+            assigned_inspector = None
+            for username in inspector_accounts:
+                client.post("/api/auth/login", json={"username": username, "password": "demo1234"})
+                matching_offer = next(
+                    (
+                        offer for offer in client.get("/api/offers/inbox").json()
+                        if offer["point"]["id"] == point["id"]
+                    ),
+                    None,
+                )
+                if matching_offer:
+                    accepted = client.post(f"/api/offers/{matching_offer['offer']['id']}/accept")
+                    assert accepted.status_code == 200
+                    assigned_inspector = username
+                    break
+            assert assigned_inspector is not None
+            active = client.get("/api/visits/active").json()
+            assert active["context"]["point"]["request_form_id"] == form_id
+            assert active["visit"]["signature_uploaded"] is False
+            inspector_form = client.get(f"/api/forms/{form_id}")
+            assert inspector_form.status_code == 200
+            assert inspector_form.json()["payload"]["number"] == "IN-TEST-1"
+            original_payload = inspector_form.json()["payload"]
+            unauthorized_inspector = next(username for username in inspector_accounts if username != assigned_inspector)
+            client.post("/api/auth/login", json={"username": unauthorized_inspector, "password": "demo1234"})
+            assert client.get(f"/api/forms/{form_id}").status_code == 403
+            assert client.get(f"/api/visits/{active['visit']['id']}/in-report-form").status_code == 403
+
+            client.post("/api/auth/login", json={"username": assigned_inspector, "password": "demo1234"})
+            report_form_url = f"/api/visits/{active['visit']['id']}/in-report-form"
+            report_form = client.get(report_form_url)
+            assert report_form.status_code == 200
+            assert report_form.json()["can_edit"] is True
+            assert report_form.json()["payload"]["number"] == original_payload["number"]
+            incomplete_payload = dict(report_form.json()["payload"], duration="", observation="")
+            incomplete = client.put(report_form_url, json={"payload": incomplete_payload})
+            assert incomplete.status_code == 400
+            assert incomplete.json()["error"] == "required_field"
+
+            visit_id = active["visit"]["id"]
+            assert client.post(f"/api/visits/{visit_id}/en-route").status_code == 200
+            location = {
+                "lat": active["context"]["equipment"]["lat"],
+                "lng": active["context"]["equipment"]["lng"],
+            }
+            assert client.post(f"/api/visits/{visit_id}/arrive", json=location).status_code == 200
+            incomplete_report = client.post(
+                f"/api/visits/{visit_id}/submit",
+                json={"result": "accept", "note": "گزارش بازرسی کامل است"},
+            )
+            assert incomplete_report.status_code == 409
+            assert incomplete_report.json()["error"] == "in_report_incomplete"
+
+            completed_payload = dict(
+                report_form.json()["payload"],
+                duration="یک ساعت",
+                observation="بازرسی انجام شد و نتیجه ثبت گردید.",
+            )
+            saved_report_form = client.put(report_form_url, json={"payload": completed_payload})
+            assert saved_report_form.status_code == 200
+            assert saved_report_form.json()["completed"] is True
+            assert saved_report_form.json()["payload"]["observation"] == completed_payload["observation"]
+            assert client.get(f"/api/forms/{form_id}").json()["payload"] == original_payload
+
+            client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
+            manager_report_form = client.get(report_form_url)
+            assert manager_report_form.status_code == 200
+            assert manager_report_form.json()["can_edit"] is False
+            assert manager_report_form.json()["payload"]["observation"] == completed_payload["observation"]
     finally:
         reset_engine()
 
@@ -538,12 +789,12 @@ def test_client_can_reject_reviewed_report_with_reason_and_manager_sees_it():
             json={"reason": "گواهی پیوست‌شده نیازمند اصلاح است"},
         )
         assert rejected.status_code == 200
-        assert rejected.json()["phase"] == "closed"
+        assert rejected.json()["phase"] == "submitted"
         company_record = client.get("/api/company/inspections")
-        row = next(item for item in company_record.json() if item["visit_id"] == report["visit_id"])
-        assert row["client_rejection_note"] == "گواهی پیوست‌شده نیازمند اصلاح است"
+        assert all(item["visit_id"] != report["visit_id"] for item in company_record.json())
 
         client.post("/api/auth/login", json={"username": "manager", "password": "demo1234"})
+        assert any(row["visit_id"] == report["visit_id"] for row in client.get("/api/reports/inbox").json())
         desk = client.get("/api/manager/desk").json()
         rejected_row = next(row for row in desk["rejected_reports"] if row["visit_id"] == report["visit_id"])
         assert rejected_row["reason"] == "گواهی پیوست‌شده نیازمند اصلاح است"
@@ -606,7 +857,7 @@ def test_client_approval_fills_inspector_record():
         rows = client.get("/api/inspector/record").json()
         match = next(row for row in rows if row["visit_id"] == report["visit_id"])
         assert match["company"] == "ماشین‌سازی البرز"
-        assert match["client"] == "پتروشیمی بندر امام"
+        assert match["client"] == "کارفرمای طرح فلامینگو"
         assert match["date"]
         assert match["time"]
         assert "تا" in match["window"]

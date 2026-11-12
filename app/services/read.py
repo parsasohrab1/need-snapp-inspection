@@ -41,7 +41,7 @@ def _order_map(session: Session) -> dict[int, PurchaseOrder]:
 
 def visible_points(session: Session, actor: User) -> list[InspectionPoint]:
     points = session.scalars(select(InspectionPoint).order_by(InspectionPoint.id)).all()
-    if actor.role in {"admin", "coordinator"}:
+    if actor.role in {"admin", "coordinator", "executive_manager"}:
         return list(points)
     if actor.role == "unit_manager":
         return [point for point in points if point.unit_manager_id == actor.id]
@@ -361,15 +361,18 @@ def point_detail(session: Session, point_id: int, actor: User | None = None) -> 
         },
         "companies": {"buyer": buyer.name, "vendor": vendor.name},
         "documents": [
-            {"id": doc.id, "type": doc.doc_type, "label": DOC_LABELS.get(doc.doc_type, doc.doc_type), "title": doc.title, "filename": doc.filename}
+            {
+                "id": doc.id,
+                "type": doc.doc_type,
+                "label": DOC_LABELS.get(doc.doc_type, doc.doc_type),
+                "title": doc.title,
+                "filename": doc.filename,
+                "download_url": f"/api/documents/{doc.id}/file" if doc.stored_name else "",
+            }
             for doc in docs
         ],
         "offers": [
-            _offer(
-                session,
-                offer,
-                include_travel=actor is not None and actor.role in {"inspector", "manager", "unit_manager"},
-            )
+            _offer(session, offer, include_travel=actor is not None and actor.role in {"inspector", "manager", "unit_manager"})
             for offer in offers
         ],
         "visits": [_visit_brief(session, visit) for visit in visits],
@@ -379,8 +382,8 @@ def point_detail(session: Session, point_id: int, actor: User | None = None) -> 
 
 
 def manager_dashboard(session: Session, actor: User, kind: str | None = None) -> dict:
-    if actor.role != "manager":
-        raise DomainError("forbidden", "این میز کار برای مدیر پروژه است.", 403)
+    if actor.role not in {"manager", "executive_manager"}:
+        raise DomainError("forbidden", "این میز کار برای مدیر پروژه و مدیر اجرایی است.", 403)
     points = visible_points(session, actor)
     project_index = project_by_equipment(session)
     if kind:
@@ -483,6 +486,9 @@ def manager_dashboard(session: Session, actor: User, kind: str | None = None) ->
             "tag": item.tag,
             "title": point.title,
             "request_status": point.request_status,
+            "request_note": point.request_note,
+            "department": point.request_department,
+            "unit_manager_id": point.unit_manager_id,
         })
 
     def inspection_row(point: InspectionPoint, visit: Visit | None = None) -> dict:
@@ -501,6 +507,8 @@ def manager_dashboard(session: Session, actor: User, kind: str | None = None) ->
             "inspector": inspector_names.get(visit.inspector_id, "") if visit else "",
             "reason": (visit.client_rejection_note or visit.note) if visit and (visit.result == "reject" or visit.client_rejection_note) else point.request_note,
             "client_approved_at": visit.client_approved_at.isoformat(sep=" ", timespec="seconds") if visit and visit.client_approved_at else "",
+            "report_stage": visit.report_stage if visit else "",
+            "review_note": visit.review_note if visit else "",
         }
 
     incomplete = [
@@ -534,7 +542,7 @@ def manager_dashboard(session: Session, actor: User, kind: str | None = None) ->
     awaiting_report_review = [
         inspection_row(point_by_id[visit.point_id], visit)
         for visit in scoped_visit_rows
-        if visit.phase == "submitted"
+        if visit.phase == "submitted" and visit.report_stage == "manager_review"
     ]
     missing_documents = [
         {
@@ -582,7 +590,8 @@ def manager_dashboard(session: Session, actor: User, kind: str | None = None) ->
 def unit_manager_dashboard(session: Session, actor: User) -> dict:
     if actor.role not in {"unit_manager", "admin"}:
         raise DomainError("forbidden", "این میز کار فقط برای مدیر واحد است.", 403)
-    points = [point for point in visible_points(session, actor) if point.request_status == "unit_review"]
+    assigned_points = visible_points(session, actor)
+    points = [point for point in assigned_points if point.request_status == "unit_review"]
     rows = []
     for point in points:
         item = session.get(Equipment, point.equipment_id)
@@ -600,7 +609,36 @@ def unit_manager_dashboard(session: Session, actor: User) -> dict:
             "request_note": point.request_note,
             "request_form_id": point.request_form_id,
         })
-    return {"requests": rows}
+    sent_points = [
+        point
+        for point in assigned_points
+        if point.request_status in {"inspection_queue", "approved_no_inspector"}
+    ]
+    dispatches = dispatch_for_points(session, sent_points)
+    sent_rows = []
+    for point in sent_points:
+        item = session.get(Equipment, point.equipment_id)
+        order = session.get(PurchaseOrder, item.po_id)
+        project = session.get(Project, order.project_id)
+        buyer = session.get(Company, project.buyer_company_id)
+        dispatch = dispatches.get(point.id, {})
+        sent_rows.append({
+            "point_id": point.id,
+            "tag": item.tag,
+            "project": project.name,
+            "buyer": buyer.name if buyer else "",
+            "title": point.title,
+            "department": point.request_department,
+            "request_status": point.request_status,
+            "request_note": point.request_note,
+            "request_form_id": point.request_form_id,
+            "dispatch_status": point.status,
+            "inspector": dispatch.get("inspector", ""),
+            "dispatch_sentence": dispatch.get("sentence", ""),
+            "offered": dispatch.get("offered", []),
+        })
+    report_rows = _report_rows(session, actor, "submitted", "unit_review")
+    return {"requests": rows, "sent_requests": sent_rows, "reports": report_rows}
 
 
 def request_comments(session: Session, point_id: int) -> list[dict]:
@@ -645,6 +683,7 @@ def _offer(session: Session, offer: Offer, *, include_travel: bool = False) -> d
     }
     if include_travel:
         result["travel_irr"] = offer.travel_irr
+        result["total_inspector_irr"] = offer.net_irr + offer.travel_irr
     return result
 
 
@@ -658,7 +697,7 @@ def stage_history(session: Session, focus_point_id: int) -> list[dict]:
     ).all()
     by_id = {point.id: point for point in points}
     visits = session.scalars(
-        select(Visit).where(Visit.point_id.in_(list(by_id)), Visit.phase.in_(("submitted", "closed", "client", "confirmed"))).order_by(Visit.id)
+        select(Visit).where(Visit.point_id.in_(list(by_id)), Visit.phase.in_(("on_site", "submitted", "closed", "client", "confirmed"))).order_by(Visit.id)
     ).all()
     if not visits:
         return []
@@ -691,6 +730,8 @@ def stage_history(session: Session, focus_point_id: int) -> list[dict]:
                 "title": point.title,
                 "ivr_no": visit.ivr_no or "پیش‌نویس",
                 "result": visit.result,
+                "report_stage": visit.report_stage,
+                "review_note": visit.review_note,
                 "note": visit.note,
                 "client_rejection_note": visit.client_rejection_note,
                 "inspector": user.name if user else "",
@@ -707,6 +748,15 @@ def _visit_brief(session: Session, visit: Visit) -> dict:
     return {
         "id": visit.id,
         "phase": visit.phase,
+        "report_stage": visit.report_stage,
+        "report_stage_label": {
+            "unit_review": "در انتظار مدیر واحد",
+            "manager_review": "در انتظار مدیر پروژه",
+            "client_review": "در انتظار کارفرما",
+            "inspector_revision": "در انتظار اصلاح بازرس",
+            "confirmed": "تأیید نهایی کارفرما",
+        }.get(visit.report_stage, visit.report_stage),
+        "review_note": visit.review_note,
         "result": visit.result,
         "ivr_no": visit.ivr_no,
         "inspector": user.name,
@@ -715,9 +765,22 @@ def _visit_brief(session: Session, visit: Visit) -> dict:
     }
 
 
+def _visit_signature_uploaded(session: Session, visit: Visit) -> bool:
+    signature = session.scalar(
+        select(Evidence)
+        .where(
+            Evidence.visit_id == visit.id,
+            Evidence.kind == "inspector_signature",
+            Evidence.stored_name != "",
+        )
+        .order_by(Evidence.id.desc())
+    )
+    return bool(signature and (visit.reviewed_at is None or signature.created_at > visit.reviewed_at))
+
+
 def visit_ivr(session: Session, visit_id: int, actor: User | None = None) -> dict:
     visit = session.get(Visit, visit_id)
-    detail = point_detail(session, visit.point_id, actor)
+    detail = point_detail(session, visit.point_id)
     inspector = session.get(Inspector, visit.inspector_id)
     user = session.get(User, inspector.user_id)
     answers = session.scalars(select(ChecklistAnswer).where(ChecklistAnswer.visit_id == visit.id)).all()
@@ -731,6 +794,15 @@ def visit_ivr(session: Session, visit_id: int, actor: User | None = None) -> dic
             "id": visit.id,
             "ivr_no": visit.ivr_no or "پیش‌نویس",
             "phase": visit.phase,
+            "report_stage": visit.report_stage,
+            "report_stage_label": {
+                "unit_review": "در انتظار مدیر واحد",
+                "manager_review": "در انتظار مدیر پروژه",
+                "client_review": "در انتظار کارفرما",
+                "inspector_revision": "در انتظار اصلاح بازرس",
+                "confirmed": "تأیید نهایی کارفرما",
+            }.get(visit.report_stage, visit.report_stage),
+            "review_note": visit.review_note,
             "result": visit.result,
             "note": visit.note,
             "remote": visit.remote,
@@ -740,6 +812,8 @@ def visit_ivr(session: Session, visit_id: int, actor: User | None = None) -> dic
             "city": inspector.city,
             "certifications": inspector.certifications,
             "signature_verified": visit.phase in {"submitted", "client", "confirmed"} and visit.submitted_at is not None,
+            "signature_uploaded": _visit_signature_uploaded(session, visit),
+            "report_form_completed": bool(visit.report_form_json and visit.report_form_json != "{}"),
         },
         "context": detail,
         "answers": [{"item_id": row.item_id, "value": row.value, "note": row.note} for row in answers],
@@ -752,29 +826,26 @@ def visit_ivr(session: Session, visit_id: int, actor: User | None = None) -> dic
                 "media_type": row.media_type,
                 "lat": row.lat,
                 "lng": row.lng,
+                "created_at": row.created_at.isoformat(sep=" ", timespec="seconds"),
                 "url": f"/api/evidence/{row.id}/file" if row.stored_name else "",
             }
             for row in photos
         ],
         "timeline": [{"action": row.action, "detail": row.detail, "at": row.created_at.isoformat(sep=" ", timespec="seconds")} for row in timeline],
         "money": None
-        if offer is None
+        if offer is None or actor is None or actor.role not in {"inspector", "manager", "unit_manager"}
         else {
             "fee_irr": offer.fee_irr,
             "commission_irr": offer.commission_irr,
-            "net_irr": offer.net_irr,
-            **(
-                {"travel_irr": offer.travel_irr}
-                if actor is not None and actor.role in {"inspector", "manager", "unit_manager"}
-                else {}
-            ),
+            "net_irr": offer.net_irr + offer.travel_irr,
+            "travel_irr": offer.travel_irr,
         },
         "comments": report_comments(session, visit.id),
     }
 
 
 def can_access_visit(session: Session, actor: User, visit: Visit) -> bool:
-    if actor.role in {"admin", "coordinator"}:
+    if actor.role in {"admin", "coordinator", "executive_manager"}:
         return True
     point = session.get(InspectionPoint, visit.point_id)
     if point is None:
@@ -785,11 +856,18 @@ def can_access_visit(session: Session, actor: User, visit: Visit) -> bool:
     if item is None or order is None or project is None:
         return False
     if actor.role in {"buyer", "manager"}:
+        if actor.role == "buyer" and visit.phase not in {"client", "confirmed"}:
+            return False
         return actor.company_id == project.buyer_company_id
     if actor.role == "vendor":
         return actor.company_id == order.vendor_company_id
     if actor.role == "unit_manager":
-        return point.unit_manager_id == actor.id
+        return session.scalar(
+            select(func.count()).select_from(InspectionPoint).where(
+                InspectionPoint.id == point.id,
+                InspectionPoint.unit_manager_id == actor.id,
+            )
+        ) > 0
     if actor.role == "inspector":
         inspector = session.scalar(select(Inspector).where(Inspector.user_id == actor.id))
         return inspector is not None and inspector.id == visit.inspector_id
@@ -879,7 +957,7 @@ def my_visit(session: Session, actor: User) -> dict | None:
     )
     if visit is None:
         return None
-    return visit_ivr(session, visit.id)
+    return visit_ivr(session, visit.id, actor)
 
 
 def list_documents(session: Session, actor: User) -> list[dict]:
@@ -1136,32 +1214,29 @@ def list_moms(session: Session) -> list[dict]:
 def manager_inbox(session: Session, actor: User) -> list[dict]:
     if actor.role not in {"manager", "coordinator", "admin"}:
         raise DomainError("forbidden", "کارتابل هماهنگ‌کننده/مدیر پروژه برای این نقش نیست.", 403)
-    return _report_rows(session, actor, "submitted")
+    return _report_rows(session, actor, "submitted", "manager_review")
 
 
-def unit_report_inbox(session: Session, actor: User) -> list[dict]:
+def unit_manager_inbox(session: Session, actor: User) -> list[dict]:
     if actor.role not in {"unit_manager", "admin"}:
         raise DomainError("forbidden", "کارتابل گزارش مدیر واحد برای این نقش نیست.", 403)
-    return _report_rows(session, actor, "unit_review")
+    return _report_rows(session, actor, "submitted", "unit_review")
 
 
 def client_inbox(session: Session, actor: User) -> list[dict]:
     if actor.role not in {"buyer", "coordinator", "admin"}:
         raise DomainError("forbidden", "کارتابل کارفرما برای این نقش نیست.", 403)
-    return _report_rows(session, actor, "client")
+    return _report_rows(session, actor, "client", "client_review")
 
 
-def _report_rows(session: Session, actor: User, phase: str) -> list[dict]:
+def _report_rows(session: Session, actor: User, phase: str, report_stage: str | None = None) -> list[dict]:
     points = {point.id: point for point in visible_points(session, actor)}
-    if actor.role in {"buyer", "unit_manager"}:
-        points = {point_id: point for point_id, point in points.items() if point.request_form_id is not None}
     if not points:
         return []
-    visits = session.scalars(
-        select(Visit)
-        .where(Visit.point_id.in_(list(points)), Visit.phase == phase)
-        .order_by(Visit.submitted_at.desc(), Visit.id.desc())
-    ).all()
+    query = select(Visit).where(Visit.point_id.in_(list(points)), Visit.phase == phase)
+    if report_stage is not None:
+        query = query.where(Visit.report_stage == report_stage)
+    visits = session.scalars(query.order_by(Visit.submitted_at.desc(), Visit.id.desc())).all()
     if not visits:
         return []
     equipment = _equipment_map(session)
@@ -1170,6 +1245,23 @@ def _report_rows(session: Session, actor: User, phase: str) -> list[dict]:
     user_ids = [row.user_id for row in inspectors.values()]
     users = {row.id: row for row in session.scalars(select(User).where(User.id.in_(user_ids))).all()}
     visit_ids = [visit.id for visit in visits]
+    evidence_counts: dict[int, int] = {}
+    if visit_ids:
+        evidence_counts = dict(
+            session.execute(
+                select(Evidence.visit_id, func.count(Evidence.id))
+                .where(Evidence.visit_id.in_(visit_ids))
+                .group_by(Evidence.visit_id)
+            ).all()
+        )
+    equipment_ids = {points[visit.point_id].equipment_id for visit in visits}
+    document_counts = dict(
+        session.execute(
+            select(Document.equipment_id, func.count(Document.id))
+            .where(Document.equipment_id.in_(equipment_ids), Document.stored_name.is_not(None))
+            .group_by(Document.equipment_id)
+        ).all()
+    ) if equipment_ids else {}
     answers = session.scalars(select(ChecklistAnswer).where(ChecklistAnswer.visit_id.in_(visit_ids), ChecklistAnswer.value == "fail")).all()
     by_visit = {visit.id: visit for visit in visits}
     failed: dict[int, list[str]] = {}
@@ -1187,13 +1279,15 @@ def _report_rows(session: Session, actor: User, phase: str) -> list[dict]:
             {
                 "visit_id": visit.id,
                 "point_id": point.id,
+                "request_form_id": point.request_form_id,
                 "ivr_no": visit.ivr_no,
                 "result": visit.result,
                 "note": visit.note,
-                "client_rejection_note": visit.client_rejection_note,
                 "submitted_at": None if visit.submitted_at is None else visit.submitted_at.isoformat(sep=" ", timespec="seconds"),
                 "tag": item.tag,
                 "title": point.title,
+                "evidence_count": evidence_counts.get(visit.id, 0),
+                "document_count": document_counts.get(item.id, 0),
                 "inspector": user.name if user else "",
                 "defects": failed.get(visit.id, []),
             }
@@ -1291,11 +1385,9 @@ def company_inspections(session: Session, actor: User) -> list[dict]:
         return []
     visits = session.scalars(
         select(Visit)
-        .where(Visit.point_id.in_(list(points)), Visit.submitted_at.is_not(None))
+        .where(Visit.point_id.in_(list(points)), Visit.phase == "confirmed", Visit.submitted_at.is_not(None))
         .order_by(Visit.submitted_at.desc(), Visit.id.desc())
     ).all()
-    if actor.role == "buyer":
-        visits = [visit for visit in visits if visit.phase == "confirmed" and points[visit.point_id].request_form_id is not None]
     equipment = _equipment_map(session)
     orders = _order_map(session)
     projects = {row.id: row for row in session.scalars(select(Project)).all()}
@@ -1331,33 +1423,18 @@ def company_inspections(session: Session, actor: User) -> list[dict]:
 
 
 def list_bills(session: Session, actor: User) -> list[dict]:
-    if actor.role not in {"buyer", "manager", "admin"}:
+    if actor.role not in {"buyer", "manager", "executive_manager", "admin"}:
         raise DomainError("forbidden", "دسترسی صورت‌وضعیت برای این نقش نیست.", 403)
     ensure_confirmed_bills(session)
     bills = session.scalars(select(Bill).order_by(Bill.issued_at.desc(), Bill.id.desc())).all()
     if actor.role in {"buyer", "manager"}:
-        visible_point_rows = visible_points(session, actor)
-        visible = {point.id for point in visible_point_rows}
-        requested_point_ids = {
-            point.id for point in visible_point_rows if point.request_form_id is not None
-        }
+        visible = {point.id for point in visible_points(session, actor)}
         visit_ids = [bill.visit_id for bill in bills]
         visits = {
             row.id: row
             for row in session.scalars(select(Visit).where(Visit.id.in_(visit_ids))).all()
         } if visit_ids else {}
-        bills = [
-            bill for bill in bills
-            if visits.get(bill.visit_id)
-            and visits[bill.visit_id].point_id in visible
-            and (
-                actor.role != "buyer"
-                or (
-                    visits[bill.visit_id].phase == "confirmed"
-                    and visits[bill.visit_id].point_id in requested_point_ids
-                )
-            )
-        ]
+        bills = [bill for bill in bills if visits.get(bill.visit_id) and visits[bill.visit_id].point_id in visible]
     rows = []
     for bill in bills:
         rows.append(
@@ -1403,7 +1480,14 @@ def list_notifications(session: Session, actor: User) -> list[dict]:
     notifications = []
     for row in rows:
         target = None
-        if row.title == "گزارش تأییدشده در کارتابل نشست":
+        if row.title in {
+            "گزارش بازرسی نیازمند بررسی مدیر واحد",
+            "گزارش بازرسی نیازمند تأیید مدیر پروژه",
+            "گزارش تأییدشده در کارتابل کارفرما",
+            "گزارش برای اصلاح برگشت",
+            "گزارش برای بررسی مجدد مدیر واحد برگشت",
+            "گزارش بازرسی برای بررسی مجدد برگشت",
+        }:
             ivr_no = row.body.split(" — ", 1)[0].strip()
             visit = session.scalar(select(Visit).where(Visit.ivr_no == ivr_no)) if ivr_no else None
             if visit is not None and can_access_visit(session, actor, visit):
@@ -1427,12 +1511,15 @@ def ledger_summary(session: Session, actor: User) -> dict:
     if inspector and actor.role == "inspector":
         query = query.where(Ledger.inspector_id == inspector.id)
     rows = session.scalars(query).all()
-    return {
+    result = {
         "count": len(rows),
         "fee_irr": sum(row.fee_irr for row in rows),
         "commission_irr": sum(row.commission_irr for row in rows),
         "net_irr": sum(row.net_irr for row in rows),
     }
+    if actor.role in {"inspector", "manager", "unit_manager"}:
+        result["travel_irr"] = sum(row.travel_irr for row in rows)
+    return result
 
 
 def dump_user(user: User, session: Session) -> dict:

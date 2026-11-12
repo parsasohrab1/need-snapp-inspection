@@ -2,17 +2,30 @@
 
 from copy import deepcopy
 
-
-def _field(key: str, label: str, kind: str = "line") -> dict:
-    return {"key": key, "label": label, "kind": kind}
+from app.domain.errors import DomainError
 
 
-def _table(key: str, title: str, columns: list[tuple[str, str]], rows: int) -> dict:
+def _field(key: str, label: str, kind: str = "line", *, required: bool = False) -> dict:
+    return {"key": key, "label": label, "kind": kind, "required": required}
+
+
+def _table(
+    key: str,
+    title: str,
+    columns: list[tuple[str, str]],
+    rows: int,
+    *,
+    required_columns: tuple[str, ...] = (),
+) -> dict:
     return {
         "key": key,
         "title": title,
-        "columns": [{"key": key_name, "label": label} for key_name, label in columns],
+        "columns": [
+            {"key": key_name, "label": label, "required": key_name in required_columns}
+            for key_name, label in columns
+        ],
         "rows": rows,
+        "required_columns": list(required_columns),
     }
 
 
@@ -38,12 +51,14 @@ FORMS = {
             {
                 "title": "شناسه",
                 "fields": [
-                    _field("customer_location", "موقعیت کارفرما", "select"),
-                    _field("client", "کارفرما"),
-                    _field("number", "شماره IN"),
-                    _field("date", "تاریخ"),
-                    _field("project", "پروژه"),
-                    _field("po", "شماره سفارش"),
+                    _field("customer_location", "موقعیت کارفرما", "select", required=True),
+                    _field("client", "کارفرما", required=True),
+                    _field("number", "شماره IN", required=True),
+                    _field("date", "تاریخ", required=True),
+                    _field("project", "پروژه", required=True),
+                    _field("project_code", "کد پروژه"),
+                    _field("po", "شماره سفارش", required=True),
+                    _field("mc", "کد MC"),
                     _field("pi", "شماره PI"),
                     _field("contractor", "پیمانکار"),
                     _field("vendor", "فروشنده"),
@@ -51,21 +66,27 @@ FORMS = {
                     _field("inspection_date", "تاریخ بازرسی"),
                     _field("duration", "مدت زمان بازرسی"),
                     _field("contact", "اطلاعات تماس"),
-                    _field("location", "محل"),
-                    _field("tag", "تگ تجهیز"),
-                    _field("itp_item", "ردیف ITP"),
+                    _field("vendor_representative", "نماینده فروشنده"),
+                    _field("mobile", "شماره همراه"),
+                    _field("contact_phone", "تلفن تماس"),
+                    _field("email", "نشانی ایمیل"),
+                    _field("location", "محل", required=True),
+                    _field("location_city", "شهر محل بازرسی"),
+                    _field("location_address", "نشانی دقیق محل بازرسی"),
+                    _field("tag", "تگ تجهیز", required=True),
+                    _field("itp_item", "ردیف ITP", required=True),
                     _field("inspector", "نام بازرس"),
-                    _field("discipline", "تخصص"),
+                    _field("discipline", "تخصص", required=True),
                 ],
             },
             {
                 "title": "مشاهده",
                 "fields": [
-                    _field("reference", "مدرک مرجع"),
+                    _field("reference", "مدرک مرجع", required=True),
                     _field("reference_documents", "مدارک مرجع", "area"),
                     _field("materials", "مواد و اقلام", "area"),
-                    _field("scope", "دامنه بازرسی", "area"),
-                    _field("category", "نوع: اطلاعات / پانچ / Hold"),
+                    _field("scope", "دامنه بازرسی", "area", required=True),
+                    _field("category", "نوع: اطلاعات / پانچ / Hold", required=True),
                     _field("observation", "متن یادداشت", "area"),
                     _field("follow_up", "اقدام بعدی", "area"),
                     _field("advance_notice", "مهلت اعلام قبلی"),
@@ -82,6 +103,26 @@ FORMS = {
                 ],
             },
         ],
+        "tables": [
+            _table(
+                "reference_documents",
+                "مدارک مرجع",
+                [("title", "عنوان سند"), ("document_no", "شماره سند"), ("issue_date", "تاریخ صدور"), ("revision", "ویرایش / کد")],
+                1,
+            ),
+            _table(
+                "materials",
+                "اطلاعات و اقلام اضافی",
+                [("item_no", "ردیف"), ("material", "شرح کالا / مواد"), ("quantity", "تعداد"), ("test_frequency", "تناوب آزمون")],
+                1,
+            ),
+            _table(
+                "items",
+                "شرح کالا",
+                [("item", "نام کالا"), ("unit", "واحد"), ("quantity", "تعداد"), ("description", "توضیحات")],
+                1,
+            ),
+        ],
     },
     "itp": {
         "code": "ITP",
@@ -92,20 +133,26 @@ FORMS = {
             {
                 "title": "سربرگ",
                 "fields": [
-                    _field("number", "شماره ITP"),
+                    _field("number", "شماره ITP", required=True),
                     _field("revision", "رویزین"),
-                    _field("date", "تاریخ"),
-                    _field("client", "کارفرما"),
-                    _field("vendor", "سازنده"),
-                    _field("project", "پروژه"),
-                    _field("po", "شماره سفارش"),
-                    _field("tag", "تگ تجهیز"),
-                    _field("code", "کد یا استاندارد ساخت"),
+                    _field("date", "تاریخ", required=True),
+                    _field("client", "کارفرما", required=True),
+                    _field("vendor", "سازنده", required=True),
+                    _field("project", "پروژه", required=True),
+                    _field("po", "شماره سفارش", required=True),
+                    _field("tag", "تگ تجهیز", required=True),
+                    _field("code", "کد یا استاندارد ساخت", required=True),
                 ],
             }
         ],
         "tables": [
-            _table("lines", "ردیف‌های برنامه", ITP_COLUMNS, 8),
+            _table(
+                "lines",
+                "ردیف‌های برنامه",
+                ITP_COLUMNS,
+                8,
+                required_columns=("item", "activity", "reference", "criteria", "intervention"),
+            ),
         ],
         "tail": {
             "title": "امضای تصویب",
@@ -130,26 +177,26 @@ FORMS = {
             {
                 "title": "شناسه بازدید",
                 "fields": [
-                    _field("number", "شماره IVR"),
-                    _field("date", "تاریخ بازدید"),
-                    _field("client", "کارفرما"),
-                    _field("vendor", "سازنده"),
-                    _field("project", "پروژه"),
-                    _field("po", "شماره سفارش"),
-                    _field("location", "محل"),
-                    _field("tag", "تگ تجهیز"),
-                    _field("itp_item", "ردیف ITP"),
-                    _field("inspector", "نام بازرس"),
+                    _field("number", "شماره IVR", required=True),
+                    _field("date", "تاریخ بازدید", required=True),
+                    _field("client", "کارفرما", required=True),
+                    _field("vendor", "سازنده", required=True),
+                    _field("project", "پروژه", required=True),
+                    _field("po", "شماره سفارش", required=True),
+                    _field("location", "محل", required=True),
+                    _field("tag", "تگ تجهیز", required=True),
+                    _field("itp_item", "ردیف ITP", required=True),
+                    _field("inspector", "نام بازرس", required=True),
                     _field("certificate", "شماره گواهی صلاحیت"),
                 ],
             },
             {
                 "title": "دامنه",
                 "fields": [
-                    _field("scope", "دامنه بازدید", "area"),
-                    _field("documents", "مدارک بررسی‌شده", "area"),
+                    _field("scope", "دامنه بازدید", "area", required=True),
+                    _field("documents", "مدارک بررسی‌شده", "area", required=True),
                     _field("ncr", "شماره عدم انطباق"),
-                    _field("conclusion", "نتیجه بازدید", "area"),
+                    _field("conclusion", "نتیجه بازدید", "area", required=True),
                 ],
             },
         ],
@@ -165,6 +212,7 @@ FORMS = {
                 "یافته‌ها",
                 [("item", "بند"), ("result", "قبول / رد / موضوعیت ندارد"), ("remark", "شرح")],
                 5,
+                required_columns=("item", "result"),
             ),
         ],
         "tail": {
@@ -188,15 +236,15 @@ FORMS = {
             {
                 "title": "جلسه",
                 "fields": [
-                    _field("number", "شماره MOM"),
-                    _field("date", "تاریخ"),
+                    _field("number", "شماره MOM", required=True),
+                    _field("date", "تاریخ", required=True),
                     _field("start", "ساعت شروع"),
                     _field("end", "ساعت پایان"),
-                    _field("place", "محل"),
-                    _field("project", "پروژه"),
-                    _field("subject", "موضوع", "area"),
-                    _field("agenda", "دستور جلسه", "area"),
-                    _field("discussion", "خلاصه بحث", "area"),
+                    _field("place", "محل", required=True),
+                    _field("project", "پروژه", required=True),
+                    _field("subject", "موضوع", "area", required=True),
+                    _field("agenda", "دستور جلسه", "area", required=True),
+                    _field("discussion", "خلاصه بحث", "area", required=True),
                     _field("next_meeting", "جلسه بعد"),
                     _field("distribution", "توزیع"),
                 ],
@@ -256,18 +304,31 @@ def normalize(kind: str, payload: dict | None) -> dict:
     for section in spec["sections"]:
         for field in section["fields"]:
             clean[field["key"]] = _text(given.get(field["key"]), 2000 if field["kind"] == "area" else 200)
+            if field.get("required") and not clean[field["key"]]:
+                raise DomainError("required_field", f"تکمیل فیلد «{field['label']}» الزامی است.", 400)
     tail = spec.get("tail")
     if tail:
         for field in tail["fields"]:
             clean[field["key"]] = _text(given.get(field["key"]))
+            if field.get("required") and not clean[field["key"]]:
+                raise DomainError("required_field", f"تکمیل فیلد «{field['label']}» الزامی است.", 400)
     for table in spec.get("tables", []):
         rows = given.get(table["key"])
         if not isinstance(rows, list):
             rows = []
         built = []
-        for index in range(table["rows"]):
+        row_count = max(table["rows"], min(len(rows), 100))
+        for index in range(row_count):
             source = rows[index] if index < len(rows) and isinstance(rows[index], dict) else {}
             built.append({column["key"]: _text(source.get(column["key"])) for column in table["columns"]})
+            if index == 0:
+                for column in table["columns"]:
+                    if column.get("required") and not built[-1][column["key"]]:
+                        raise DomainError(
+                            "required_field",
+                            f"تکمیل «{table['title']} - {column['label']}» الزامی است.",
+                            400,
+                        )
         clean[table["key"]] = built
     return clean
 
