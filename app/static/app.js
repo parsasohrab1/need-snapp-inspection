@@ -241,6 +241,7 @@ function shell(title, subtitle, body) {
   const buyerItems = [
     ["desk", "میز کار"],
     ["buyer-new-in", "ثبت IN جدید"],
+    ["buyer-new-international", "ثبت IN خارج از کشور"],
     ["buyer-in-list", "مشاهده INهای ثبت‌شده"],
     ["buyer-itp-new", "ثبت ITP جدید"],
     ["buyer-itp-list", "مشاهده ITPهای ثبت‌شده"],
@@ -278,12 +279,12 @@ function shell(title, subtitle, body) {
         <div class="side-heading">${state.me.role === "buyer" ? "کارفرما" : esc(ROLE_LABEL[state.me.role] || "منوی اصلی")}</div>
         ${state.me.role === "buyer" ? `
           <div class="buyer-nav-group">
-            ${visibleItems.slice(0, 5).map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
+            ${visibleItems.slice(0, 6).map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
             <details class="buyer-nav-reports" open>
               <summary class="navbtn ${["buyer-progress", "buyer-completed", "buyer-status"].includes(state.view) ? "active" : ""}">گزارش بازرسی</summary>
-              ${visibleItems.slice(5, 8).map(([id, label]) => `<button class="navbtn nav-sub ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
+              ${visibleItems.slice(6, 9).map(([id, label]) => `<button class="navbtn nav-sub ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
             </details>
-            ${visibleItems.slice(8).map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
+            ${visibleItems.slice(9).map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
           </div>` : visibleItems.map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
         <div class="spacer"></div>
         <div class="who">${esc(state.me.name)}<br>${esc(ROLE_LABEL[state.me.role] || state.me.role)}${state.me.company ? `<br>${esc(state.me.company)}` : ""}</div>
@@ -921,7 +922,10 @@ async function renderBuyerDesk() {
     `<div class="buyer-dashboard">
       <section class="buyer-welcome">
         <div><p class="eyebrow">داشبورد کارفرما</p><h2>خوش آمدید، ${esc(state.me.name)}</h2><p>${esc(today)}</p></div>
-        <button class="primary" data-act="goto" data-view="buyer-new-in">ثبت درخواست بازرسی جدید</button>
+        <div class="buyer-welcome-actions">
+          <button class="primary" data-act="goto" data-view="buyer-new-in">ثبت درخواست بازرسی جدید</button>
+          <button class="ghost" data-act="goto" data-view="buyer-new-international">ثبت IN خارج از کشور</button>
+        </div>
       </section>
       <section class="buyer-kpis">
         <button class="buyer-kpi tone-amber" data-act="goto" data-view="buyer-status"><span>وظایف و موارد نیازمند پیگیری</span><strong>${todayTasks.toLocaleString("fa-IR")}</strong><small>درخواست‌های در انتظار بررسی</small></button>
@@ -941,6 +945,8 @@ async function renderBuyerDesk() {
 }
 
 async function renderBuyerNewIn() {
+  const international = state.view === "buyer-new-international";
+  if (international) state.requestCustomerLocation = "international";
   const board = await api("/api/board?kind=project");
   const eligible = board.filter((row) => ["draft", "documents_missing", "returned"].includes(row.request_status));
   const locations = [
@@ -948,20 +954,20 @@ async function renderBuyerNewIn() {
     ["international", "ثبت IN خارج از کشور", "◎", "ثبت درخواست بازرسی در پروژه‌های خارج از کشور"],
   ];
   app.innerHTML = shell(
-    "ثبت IN جدید",
-    "برای شروع، موقعیت پروژه را انتخاب کنید",
-    `<div class="buyer-page buyer-in-entry">
-      <section class="buyer-in-location">
+    international ? "New International IN Registration" : "ثبت IN جدید",
+    international ? "Select an inspection point to start your international request." : "برای شروع، موقعیت پروژه را انتخاب کنید",
+    `<div class="buyer-page buyer-in-entry ${international ? "buyer-in-entry-international" : ""}"${international ? ' dir="ltr"' : ""}>
+      ${international ? "" : `<section class="buyer-in-location">
         <p class="eyebrow">درخواست بازرسی جدید</p>
         <h2>موقعیت پروژه را انتخاب کنید</h2>
         <p>پس از انتخاب موقعیت، نقطهٔ بازرسی را برگزینید و فرم IN را تکمیل کنید.</p>
         <div class="buyer-location-options">${locations.map(([key, title, icon, description]) => `<button class="buyer-location-option ${state.requestCustomerLocation === key ? "selected" : ""}" data-act="choose-in-location" data-location="${key}" aria-pressed="${state.requestCustomerLocation === key}">
           <span class="buyer-location-icon" aria-hidden="true">${icon}</span><span><b>${title}</b><small>${description}</small></span><span class="buyer-location-arrow" aria-hidden="true">←</span>
         </button>`).join("")}</div>
-      </section>
+      </section>`}
       ${state.requestCustomerLocation ? `<article class="card pad buyer-point-list">
-        <div class="buyer-page-intro"><div><h3>انتخاب نقطهٔ بازرسی</h3><p>فرم IN برای ${state.requestCustomerLocation === "international" ? "پروژهٔ خارج از کشور" : "پروژهٔ داخل کشور"} تکمیل خواهد شد.</p></div><span class="buyer-count">${eligible.length.toLocaleString("fa-IR")} نقطه</span></div>
-        ${eligible.map((row) => `<div class="buyer-point-row"><span><b>${esc(row.tag)} · ${esc(row.title)}</b><small>${esc(row.project_name)} · ${esc(row.discipline_label)} · ${esc(row.request_status === "returned" ? "مرجوع‌شده برای اصلاح" : row.request_status === "documents_missing" ? "نقص مدارک" : "آماده ثبت IN")}</small></span><button class="primary" data-act="open-request-form" data-id="${row.id}" data-location="${state.requestCustomerLocation}">${row.request_status === "returned" ? "اصلاح فرم IN" : "تکمیل فرم IN"}</button></div>`).join("") || `<p class="empty">نقطه‌ای برای ثبت درخواست IN موجود نیست.</p>`}
+        <div class="buyer-page-intro"><div><h3>${international ? "Select an Inspection Point" : "انتخاب نقطهٔ بازرسی"}</h3><p>${international ? "Choose an eligible point before completing the international IN form." : `فرم IN برای ${state.requestCustomerLocation === "international" ? "پروژهٔ خارج از کشور" : "پروژهٔ داخل کشور"} تکمیل خواهد شد.`}</p></div><span class="buyer-count">${eligible.length.toLocaleString(international ? "en-US" : "fa-IR")} ${international ? "points" : "نقطه"}</span></div>
+        ${eligible.map((row) => `<div class="buyer-point-row"><span><b>${esc(row.tag)} · ${esc(row.title)}</b><small>${esc(row.project_name)} · ${esc(row.discipline_label)} · ${international ? (row.request_status === "returned" ? "Returned for revision" : row.request_status === "documents_missing" ? "Missing documents" : "Ready for IN registration") : row.request_status === "returned" ? "مرجوع‌شده برای اصلاح" : row.request_status === "documents_missing" ? "نقص مدارک" : "آماده ثبت IN"}</small></span><button class="primary" data-act="open-request-form" data-id="${row.id}" data-location="${state.requestCustomerLocation}">${international ? (row.request_status === "returned" ? "Revise IN Form" : "Complete IN Form") : row.request_status === "returned" ? "اصلاح فرم IN" : "تکمیل فرم IN"}</button></div>`).join("") || `<p class="empty">${international ? "No inspection points are currently available for IN registration." : "نقطه‌ای برای ثبت درخواست IN موجود نیست."}</p>`}
       </article>` : ""}
     </div>`
   );
@@ -1000,10 +1006,61 @@ async function renderBuyerProgress() {
     ["offering", "assigned", "en_route", "on_site", "submitted"].includes(row.status)
       || ["manager_review", "unit_review", "executive_review", "inspection_queue", "approved", "approved_no_inspector"].includes(row.request_status)
   );
+  const progressRows = await Promise.all(rows.map(async (row) => {
+    const [detail, form] = await Promise.all([
+      api(`/api/points/${row.id}`),
+      row.request_form_id ? api(`/api/forms/${row.request_form_id}`) : Promise.resolve(null),
+    ]);
+    const location = [
+      detail.equipment.workshop_name,
+      detail.equipment.city,
+    ].filter(Boolean).join("، ");
+    const payload = form?.payload || {};
+    const searchable = [
+      payload.number,
+      detail.order.number,
+      detail.project.name,
+      detail.companies.vendor,
+      location,
+      row.tag,
+      row.title,
+    ].filter(Boolean).join(" ").toLocaleLowerCase("fa-IR");
+    const inspectionActive = ["offering", "assigned", "en_route", "on_site"].includes(row.status);
+    const status = inspectionActive
+      ? ["در حال انجام", "In Progress"]
+      : row.status === "submitted"
+        ? ["در انتظار بررسی گزارش", "Report Review"]
+        : row.request_status === "manager_review"
+          ? ["بررسی مدیر پروژه", "Project Manager Review"]
+          : row.request_status === "unit_review"
+            ? ["بررسی مدیر واحد", "Unit Manager Review"]
+            : ["در جریان تأیید درخواست", "Request Review"];
+    return { row, detail, form, location, searchable, status };
+  }));
   app.innerHTML = shell(
     "بازرسی‌های در حال انجام",
     "درخواست‌های در گردش و نقاطی که هنوز به نتیجهٔ نهایی نرسیده‌اند",
-    `<article class="card pad buyer-page">${buyerBoardTable(rows, "بازرسی در حال انجامی وجود ندارد.")}</article>`
+    `<article class="card pad buyer-page buyer-progress-page">
+      <label class="buyer-progress-search"><span aria-hidden="true">⌕</span><input type="search" data-buyer-progress-search placeholder="جست‌وجو در بازرسی‌های در حال انجام (Search in inspections in progress...)" aria-label="جست‌وجو در بازرسی‌های در حال انجام"></label>
+      <div class="tablewrap buyer-progress-table-wrap"><table class="buyer-progress-table">
+        <thead><tr>
+          <th>مشاهده گزارش<br><small>(View Report)</small></th>
+          <th>محل بازرسی<br><small>(Inspection Location)</small></th>
+          <th>پیمانکار<br><small>(Contractor)</small></th>
+          <th>نام پروژه<br><small>(Project Name)</small></th>
+          <th>شماره PO<br><small>(PO Number)</small></th>
+          <th>شماره IN<br><small>(IN Number)</small></th>
+        </tr></thead>
+        <tbody>${progressRows.map(({ row, detail, form, location, searchable, status }) => `<tr data-buyer-progress-row data-search="${esc(searchable)}">
+          <td><span class="buyer-progress-status">${esc(status[0])}<small>(${esc(status[1])})</small></span><button class="buyer-progress-view" type="button" data-act="open-point" data-id="${row.id}" aria-label="مشاهده گزارش ${esc(row.tag)}" title="مشاهده گزارش">◉</button></td>
+          <td>${esc(location || "—")}</td>
+          <td>${esc(detail.companies.vendor || form?.payload?.contractor || "—")}</td>
+          <td>${esc(detail.project.name || row.project_name)}<small>${esc(row.tag)} · ${esc(row.title)}</small></td>
+          <td>${esc(detail.order.number || form?.payload?.po || "—")}</td>
+          <td>${esc(form?.payload?.number || "—")}</td>
+        </tr>`).join("") || `<tr class="buyer-progress-empty"><td colspan="6">بازرسی در حال انجامی وجود ندارد.</td></tr>`}</tbody>
+      </table></div>
+    </article>`
   );
 }
 
@@ -2277,6 +2334,7 @@ async function render() {
   const views = {
     desk: renderDesk,
     "buyer-new-in": renderBuyerNewIn,
+    "buyer-new-international": renderBuyerNewIn,
     "buyer-in-list": renderBuyerInList,
     "buyer-itp-new": renderBuyerItpNew,
     "buyer-itp-list": renderBuyerItpList,
@@ -2594,6 +2652,8 @@ async function onClick(event) {
       await render();
     } else if (act === "goto") {
       if (node.dataset.view === "forms" && state.view !== "forms") state.formReturnView = state.view;
+      if (node.dataset.view === "buyer-new-international") state.requestCustomerLocation = "international";
+      if (node.dataset.view === "buyer-new-in") state.requestCustomerLocation = null;
       navigateTo(node.dataset.view);
       await render();
     } else if (act === "open-point") {
@@ -2760,6 +2820,13 @@ app.addEventListener("submit", async (event) => {
 app.addEventListener("input", (event) => {
   const search = event.target.closest("[data-in-search]");
   if (search) filterInRegistry(search.closest(".in-registry"));
+  const progressSearch = event.target.closest("[data-buyer-progress-search]");
+  if (progressSearch) {
+    const query = progressSearch.value.trim().toLocaleLowerCase("fa-IR");
+    app.querySelectorAll("[data-buyer-progress-row]").forEach((row) => {
+      row.hidden = !row.dataset.search.includes(query);
+    });
+  }
 });
 app.addEventListener("change", async (event) => {
   const registryFilter = event.target.closest("[data-in-filter]");

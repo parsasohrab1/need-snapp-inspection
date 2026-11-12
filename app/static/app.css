@@ -785,6 +785,7 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
   box-shadow: 0 8px 24px rgba(20, 43, 82, .06);
 }
 .buyer-welcome h2, .buyer-page-intro h2 { margin: 3px 0 7px; color: #102a54; font-size: 22px; }
+.buyer-welcome-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .buyer-welcome p:last-child, .buyer-page-intro p { color: var(--muted); line-height: 1.7; }
 .buyer-welcome .eyebrow, .buyer-page-intro .eyebrow { color: #9a6a18; font-size: 12px; font-weight: 800; }
 .buyer-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -875,6 +876,19 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
 .buyer-location-icon { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #d9e1eb; border-radius: 11px; font-size: 23px; }
 .buyer-location-arrow { color: #55739f; font-size: 21px; }
 .buyer-point-list .buyer-page-intro { padding: 8px 0 14px; border: 0; box-shadow: none; background: transparent; }
+.buyer-progress-page { gap: 12px; }
+.buyer-progress-search { display: flex; align-items: center; gap: 8px; width: min(100%, 740px); min-height: 42px; padding: 5px 12px; border: 1px solid #9db8dc; border-radius: 9px; color: #536b8e; background: #f9fbfe; box-shadow: 0 2px 8px rgba(20, 43, 82, .08); }
+.buyer-progress-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; }
+.buyer-progress-table { min-width: 790px; }
+.buyer-progress-table th { min-width: 105px; padding: 10px 8px; color: #172a48; background: #edf0f4; text-align: center; }
+.buyer-progress-table th small { font-size: 11px; }
+.buyer-progress-table td { min-width: 110px; text-align: center; }
+.buyer-progress-table td:nth-child(4) small { display: block; margin-top: 4px; color: var(--muted); }
+.buyer-progress-table td:first-child { min-width: 130px; }
+.buyer-progress-status { display: inline-grid; margin-inline-end: 5px; padding: 5px 7px; border: 1px solid #e2bc60; border-radius: 7px; color: #634a12; background: #fff1c8; font-size: 11px; font-weight: 750; line-height: 1.35; }
+.buyer-progress-status small { font-size: 10px; }
+.buyer-progress-view { width: 25px; height: 25px; padding: 0; border: 1px solid #aac3df; border-radius: 50%; color: #236199; background: #edf6ff; font-size: 14px; }
+.buyer-progress-table tr[hidden] { display: none; }
 .buyer-in-top-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 .buyer-in-formlayout { grid-template-columns: minmax(0, 1fr); }
 .buyer-in-sheet {
