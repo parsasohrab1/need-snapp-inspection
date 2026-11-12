@@ -29,7 +29,7 @@ const ROLE_LABEL = {
 };
 
 const app = document.querySelector("#app");
-const state = { me: null, view: "desk", viewHistory: [], formReturnView: "desk", inRequestMode: false, visitReportId: null, buyerRequestPanels: [false, false], toast: "", pointId: null, draft: {}, caption: "شاهد کارگاهی", kind: "project", formKind: "ivr", formId: null, formSpec: null, requestPointId: null, requestPoints: [], requestPrefill: null, requestCustomerLocation: null, formDraft: null, managerTab: "overview", inRegistrySearches: [{ search: "", filter: "all" }, { search: "", filter: "all" }], calendarOffset: 0, deskTimer: 0 };
+const state = { me: null, view: "desk", viewHistory: [], formReturnView: "desk", inRequestMode: false, visitReportId: null, buyerRequestPanels: [false, false], toast: "", pointId: null, draft: {}, caption: "شاهد کارگاهی", kind: "project", formKind: "ivr", formId: null, formSpec: null, requestPointId: null, requestPoints: [], requestPrefill: null, requestCustomerLocation: null, formDraft: null, managerTab: "overview", inRegistrySearches: [{ search: "", filter: "all" }, { search: "", filter: "all" }, { search: "", filter: "all" }], calendarOffset: 0, deskTimer: 0 };
 
 function navigateTo(view) {
   if (state.view === view) return;
@@ -177,6 +177,56 @@ const IN_EN = {
   "تأییدکننده و شرکت": "Acknowledged by and company",
   "تاریخ تأیید": "Acknowledgment date",
 };
+
+const INTERNATIONAL_POINT_TITLES = {
+  "جوش درز طولی": "Longitudinal Seam Welding",
+  "NDT درز طولی": "Longitudinal Seam NDT",
+  "جوش نازل و منهول": "Nozzle and Manhole Welding",
+  "NDT نازل": "Nozzle NDT",
+  "عملیات حرارتی": "Heat Treatment",
+  "آزمون هیدرواستاتیک": "Hydrostatic Test",
+  "کنترل ابعادی نهایی": "Final Dimensional Inspection",
+  "رنگ و پوشش": "Painting and Coating Inspection",
+  "پرونده نهایی ساخت": "Final Manufacturing Dossier",
+  "بازرسی مواد پوسته و لوله": "Shell and Tube Material Inspection",
+  "بازبینی WPS": "WPS Review",
+  "فیت‌آپ پوسته": "Shell Fit-up",
+  "جوش تیوب‌شیت": "Tube Sheet Welding",
+  "NDT جوش‌های فشاری": "Pressure Weld NDT",
+  "اتساع لوله": "Tube Expansion",
+  "کنترل ابعادی": "Dimensional Inspection",
+  "پوشش خارجی": "External Coating Inspection",
+  "پرونده نهایی": "Final Dossier",
+  "بازرسی مواد لوله و فیتینگ": "Pipe and Fitting Material Inspection",
+  "فیت‌آپ اسپول": "Spool Fit-up",
+  "جوش بات‌ولد": "Butt Weld Inspection",
+  "NDT جوش": "Weld NDT",
+  "کنترل ابعادی اسپول": "Spool Dimensional Inspection",
+  "آزمون نشتی": "Leak Test",
+  "نشانه‌گذاری و محافظت": "Marking and Protection",
+  "پرونده اسپول": "Spool Dossier",
+  "بازرسی مواد سازه": "Structural Material Inspection",
+  "بازبینی نقشه ساخت": "Fabrication Drawing Review",
+  "جوش سازه": "Structural Welding",
+  "NDT جوش گوشه بحرانی": "Critical Fillet Weld NDT",
+  "کنترل ابعادی شاسی": "Skid Dimensional Inspection",
+  "پوشش سازه": "Structural Coating Inspection",
+  "پرونده شاسی": "Skid Dossier",
+};
+
+function internationalPointLabel(point) {
+  return `${point.tag} · ${INTERNATIONAL_POINT_TITLES[point.title] || "Inspection Point"}`;
+}
+
+function internationalDemoValue(value) {
+  return ({
+    "کارفرمای طرح فلامینگو": "Flamingo Project Owner",
+    "ماشین‌سازی البرز": "Alborz Machinery",
+    "طرح فلامینگو — بازرسی خرید تجهیزات ثابت": "Flamingo Project — Fixed Equipment Purchase Inspection",
+    "طرح فلامینگو": "Flamingo Project",
+    "بازرسی خرید تجهیزات ثابت": "Fixed Equipment Purchase Inspection",
+  }[value] || value);
+}
 
 function localizeInSheet(sheet) {
   const copy = JSON.parse(JSON.stringify(sheet));
@@ -610,17 +660,22 @@ function filterInRegistry(registry) {
   if (!registry) return;
   const search = registry.querySelector("[data-in-search]");
   const filter = registry.querySelector("[data-in-filter]");
-  const registryIndex = [...app.querySelectorAll(".in-registry")].indexOf(registry);
+  const registryIndex = Number(registry.dataset.registryIndex ?? [...app.querySelectorAll(".in-registry")].indexOf(registry));
   if (registryIndex >= 0) {
     state.inRegistrySearches[registryIndex] = { search: search?.value || "", filter: filter?.value || "all" };
   }
   const query = search?.value.trim().toLocaleLowerCase("fa-IR") || "";
   const field = filter?.value || "all";
-  const fields = field === "all" ? ["date", "number", "buyer", "project", "point", "status"] : [field];
+  const fields = field === "all"
+    ? ["date", "number", "buyer", "project", "point", "status", "po", "contractor", "location"]
+    : ["domestic", "international"].includes(field) ? ["date", "number", "buyer", "project", "point", "status", "po", "contractor", "location"]
+      : [field];
   const rows = [...registry.querySelectorAll("[data-in-row]")];
   let visible = 0;
   rows.forEach((row) => {
-    const matches = !query || fields.some((key) => (row.dataset[key] || "").toLocaleLowerCase("fa-IR").includes(query));
+    const matchesType = !["domestic", "international"].includes(field) || row.dataset.locationType === field;
+    const matchesSearch = !query || fields.some((key) => (row.dataset[key] || "").toLocaleLowerCase("fa-IR").includes(query));
+    const matches = matchesType && matchesSearch;
     row.hidden = !matches;
     if (matches) visible += 1;
   });
@@ -1005,11 +1060,57 @@ async function renderBuyerNewIn() {
 async function renderBuyerInList() {
   const board = await api("/api/board?kind=project");
   const rows = board.filter((row) => row.request_status !== "draft");
+  const entries = await Promise.all(rows.map(async (row) => {
+    const [detail, form] = await Promise.all([
+      api(`/api/points/${row.id}`),
+      row.request_form_id ? api(`/api/forms/${row.request_form_id}`) : Promise.resolve(null),
+    ]);
+    const payload = form?.payload || {};
+    const locationType = payload.customer_location === "international" ? "international" : "domestic";
+    const number = payload.number || "";
+    const po = payload.po || detail.order.number || "";
+    const project = payload.project || detail.project.name || row.project_name || "";
+    const contractor = payload.contractor || detail.companies.vendor || "";
+    const date = payload.inspection_date || form?.created_at || "";
+    const status = requestStatusLabel(row.request_status);
+    const searchable = [number, po, project, contractor, date, payload.location, row.tag, row.title, status]
+      .filter(Boolean).join(" ").toLocaleLowerCase("fa-IR");
+    return { row, detail, form, payload, locationType, number, po, project, contractor, date, status, searchable };
+  }));
+  const saved = state.inRegistrySearches[2] || { search: "", filter: "all" };
   app.innerHTML = shell(
     "INهای ثبت‌شده",
     "فهرست درخواست‌های ارسال‌شده و وضعیت گردش کار آن‌ها",
-    `<article class="card pad buyer-page">${buyerBoardTable(rows, "هنوز درخواست IN ثبت نشده است.")}</article>`
+    `<article class="card pad buyer-page">
+      <div class="in-registry" data-registry-index="2">
+        <div class="registry-toolbar">
+          <label class="registry-search"><span aria-hidden="true">⌕</span><input type="search" data-in-search value="${esc(saved.search)}" placeholder="جست‌وجو در INهای ثبت‌شده…" aria-label="جست‌وجو در INهای ثبت‌شده"></label>
+          <label class="registry-filter"><span>جست‌وجو بر اساس</span><select data-in-filter aria-label="فیلتر فهرست IN">
+            <option value="all" ${saved.filter === "all" ? "selected" : ""}>همهٔ موارد</option>
+            <option value="date" ${saved.filter === "date" ? "selected" : ""}>تاریخ</option>
+            <option value="domestic" ${saved.filter === "domestic" ? "selected" : ""}>IN داخل کشور</option>
+            <option value="international" ${saved.filter === "international" ? "selected" : ""}>IN خارج از کشور</option>
+            <option value="number" ${saved.filter === "number" ? "selected" : ""}>شماره IN</option>
+            <option value="po" ${saved.filter === "po" ? "selected" : ""}>شماره PO</option>
+            <option value="project" ${saved.filter === "project" ? "selected" : ""}>نام پروژه</option>
+            <option value="contractor" ${saved.filter === "contractor" ? "selected" : ""}>نام پیمانکار</option>
+          </select></label>
+          <span class="registry-count">${entries.length.toLocaleString("fa-IR")} درخواست</span>
+        </div>
+        <div class="tablewrap"><table class="buyer-in-registry-table"><thead><tr>
+          <th>وضعیت</th><th>نام پیمانکار</th><th>پروژه</th><th>تاریخ</th><th>شماره IN</th>
+        </tr></thead><tbody>
+          ${entries.map(({ row, form, locationType, number, po, project, contractor, date, status, searchable }) => `<tr data-in-row data-date="${esc(date)}" data-number="${esc(number)}" data-po="${esc(po)}" data-buyer="${esc(contractor)}" data-contractor="${esc(contractor)}" data-project="${esc(project)}" data-point="${esc(`${row.tag} ${row.title}`)}" data-location="${esc(form?.payload?.location || "")}" data-location-type="${locationType}" data-status="${esc(status)}" data-search="${esc(searchable)}">
+            <td><span class="request-status">${esc(status)}</span><small>${locationType === "international" ? "International IN" : "Domestic IN"}</small></td>
+            <td>${esc(contractor || "—")}</td><td>${esc(project || "—")}<small>${esc(row.tag)} · ${esc(row.title)}</small></td>
+            <td dir="ltr">${esc(date || "—")}</td><td dir="ltr">${esc(number || "—")}</td>
+          </tr>`).join("") || `<tr><td colspan="5">هنوز درخواست IN ثبت نشده است.</td></tr>`}
+          <tr class="registry-no-results" hidden><td colspan="5">موردی با این جست‌وجو پیدا نشد.</td></tr>
+        </tbody></table></div>
+      </div>
+    </article>`
   );
+  filterInRegistry(app.querySelector(".in-registry"));
 }
 
 async function renderBuyerItpList() {
@@ -1070,6 +1171,7 @@ async function renderBuyerProgress() {
     "بازرسی‌های در حال انجام",
     "درخواست‌های در گردش و نقاطی که هنوز به نتیجهٔ نهایی نرسیده‌اند",
     `<article class="card pad buyer-page buyer-progress-page">
+      <div class="buyer-progress-heading"><span aria-hidden="true">▤</span><h2>بازرسی‌های در حال انجام</h2></div>
       <label class="buyer-progress-search"><span aria-hidden="true">⌕</span><input type="search" data-buyer-progress-search placeholder="جست‌وجو در بازرسی‌های در حال انجام (Search in inspections in progress...)" aria-label="جست‌وجو در بازرسی‌های در حال انجام"></label>
       <div class="tablewrap buyer-progress-table-wrap"><table class="buyer-progress-table">
         <thead><tr>
@@ -1825,6 +1927,12 @@ function buyerInCountry(payload, disabled) {
 
 function buyerInRequestForm(sheet, payload, { disabled, canSubmitRequest, pointOptions = "" }) {
   const international = payload.customer_location === "international";
+  if (international) {
+    payload = Object.fromEntries(Object.entries(payload).map(([key, value]) => [
+      key,
+      typeof value === "string" ? internationalDemoValue(value) : value,
+    ]));
+  }
   const findTable = (key) => (sheet.tables || []).find((table) => table.key === key);
   const actions = canSubmitRequest
     ? `<div class="buyer-in-form-actions"><button class="primary" data-act="save-form">✓ ${international ? "Submit" : "ثبت نهایی"}</button><button class="ghost" data-act="cancel-in-form">× ${international ? "Cancel" : "انصراف"}</button></div>`
@@ -2025,7 +2133,7 @@ async function renderForms() {
   const internationalPointOptions = state.inRequestMode
     && internationalIn
     && state.requestPoints.length
-    ? `<label class="buyer-in-point-select" aria-label="Inspection Point"><span class="sr-only">Inspection Point</span><select data-buyer-in-point aria-label="Inspection Point">${state.requestPoints.map((point) => `<option value="${point.id}" ${Number(point.id) === Number(state.requestPointId) ? "selected" : ""}>${esc(point.tag)} · ${esc(point.title)}</option>`).join("")}</select></label>`
+    ? `<label class="buyer-in-point-select" aria-label="Inspection Point"><span class="sr-only">Inspection Point</span><select data-buyer-in-point aria-label="Inspection Point">${state.requestPoints.map((point) => `<option value="${point.id}" ${Number(point.id) === Number(state.requestPointId) ? "selected" : ""}>${esc(internationalPointLabel(point))}</option>`).join("")}</select></label>`
     : "";
   app.innerHTML = shell(
     buyerInRequest ? (internationalIn ? "New IN Registration" : "ثبت IN داخل کشور") : `${displaySheet.code} · ${displaySheet.title_fa}`,
