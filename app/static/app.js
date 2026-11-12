@@ -1647,27 +1647,39 @@ function buyerInSelect(label, key, payload, values, disabled = false) {
 
 function buyerInTable(table, rows, { english = false, disabled = false } = {}) {
   const labels = {
-    reference_documents: english
-      ? ["Document Title", "Document No.", "Issue Date", "Revision / Code"]
-      : ["عنوان سند", "شماره سند", "تاریخ صدور", "ویرایش / کد"],
-    materials: english
-      ? ["Item No.", "Material Description", "Unit", "Quantity", "Test Frequency"]
-      : ["ردیف", "شرح کالا / مواد", "واحد", "تعداد", "تناوب آزمون"],
-    items: english
-      ? ["Item No.", "Item Name", "Unit", "Quantity", "Description"]
-      : ["ردیف", "نام کالا", "واحد", "تعداد", "توضیحات"],
+    reference_documents: {
+      title: english ? "Document Title" : "عنوان سند",
+      document_no: english ? "Document No." : "شماره سند",
+      issue_date: english ? "Issue Date" : "تاریخ صدور",
+      revision: english ? "Revision / Code" : "ویرایش / کد",
+    },
+    materials: {
+      item_no: english ? "Item No." : "ردیف",
+      material: english ? "Material Description" : "شرح کالا / مواد",
+      unit: english ? "Unit" : "واحد",
+      quantity: english ? "Quantity" : "تعداد",
+      test_frequency: english ? "Test Frequency" : "تناوب آزمون",
+    },
+    items: {
+      item_no: english ? "Item No." : "ردیف",
+      item: english ? "Item Name" : "نام کالا",
+      unit: english ? "Unit" : "واحد",
+      quantity: english ? "Quantity" : "تعداد",
+      description: english ? "Description" : "توضیحات",
+    },
   };
-  const columns = table.columns.map((column, index) => ({ ...column, label: labels[table.key]?.[index] || column.label }));
+  const columns = table.columns.map((column) => ({ ...column, label: labels[table.key]?.[column.key] || column.label }));
   const visibleColumns = english && table.key === "reference_documents"
     ? columns.filter((column) => column.key !== "issue_date")
     : columns;
   const rowList = rows?.length ? rows : [Object.fromEntries(columns.map(({ key }) => [key, ""]))];
   const placeholders = {
     "reference_documents.title": english ? "Enter document title..." : "عنوان سند را وارد کنید...",
-    "reference_documents.document_no": english ? "e.g., 5 pcs..." : "شماره سند",
+    "reference_documents.document_no": english ? "Enter document number..." : "شماره سند",
     "reference_documents.issue_date": english ? "YYYY/MM/DD" : "۱۴۰۳/۰۷/۱۵",
     "reference_documents.revision": english ? "Enter revision/code..." : "ویرایش / کد",
     "materials.material": english ? "e.g., Class 300 Valve" : "شرح کالا یا مواد",
+    "materials.unit": english ? "e.g., pcs" : "واحد",
     "materials.quantity": english ? "e.g., 5 pcs..." : "مثلاً ۵ عدد",
     "materials.test_frequency": english ? "e.g., Once per batch..." : "مثلاً یک‌بار در هر محموله",
     "items.item": "نام کالا",
@@ -1698,6 +1710,31 @@ function buyerInMap(payload, disabled) {
     <div class="buyer-in-map-controls">${buyerInSelect("شهر", "location_city", payload, ["تهران", "اصفهان", "شیراز", "تبریز", "مشهد", "اهواز", "قزوین"], disabled)}</div>
     <div class="buyer-in-map-preview">${streets}</div>
   </section>`;
+}
+
+function buyerInCountry(payload, disabled) {
+  const countries = [
+    "Germany",
+    "United Arab Emirates",
+    "Saudi Arabia",
+    "Turkey",
+    "China",
+    "India",
+    "Italy",
+    "France",
+    "United Kingdom",
+    "United States",
+    "Other",
+  ];
+  const selected = payload.location || "";
+  const options = [...new Set([selected, ...countries].filter(Boolean))];
+  return `<label class="buyer-in-field buyer-in-country"><span>Inspection Location:</span><span class="buyer-in-country-control">
+    <select data-form-key="location"${disabled ? " disabled" : ""}>
+      <option value="" ${selected ? "" : "selected"}>Select country...</option>
+      ${options.map((country) => `<option value="${esc(country)}" ${country === selected ? "selected" : ""}>${esc(country)}</option>`).join("")}
+    </select>
+    <button class="buyer-location-search" type="button" data-act="search-location" aria-label="Search location in maps" title="Search location in maps"${disabled ? " disabled" : ""}>⌕</button>
+  </span></label>`;
 }
 
 function buyerInRequestForm(sheet, payload, { disabled, canSubmitRequest }) {
@@ -1733,7 +1770,7 @@ function buyerInRequestForm(sheet, payload, { disabled, canSubmitRequest }) {
       <header class="buyer-in-sheet-title"><span>⌖</span><h2>INSPECTION NOTIFICATION NO.</h2><strong>${esc(payload.number || "—")}</strong></header>
       <div class="buyer-in-two-cards"><section class="buyer-in-fields-card">${left}</section><section class="buyer-in-fields-card">${right}</section></div>
       <div class="buyer-in-two-cards buyer-in-contact-cards"><section class="buyer-in-fields-card">${representative}</section><section class="buyer-in-fields-card">${contact}</section></div>
-      ${buyerInField("Inspection Location:", "location", payload, { placeholder: "Enter inspection location...", disabled, wide: true })}
+      ${buyerInCountry(payload, disabled)}
       ${buyerInTable(findTable("reference_documents"), payload.reference_documents, { english: true, disabled })}
       ${buyerInTable(findTable("materials"), payload.materials, { english: true, disabled })}
       <label class="buyer-in-field buyer-in-remarks"><span>Remarks:</span><textarea data-form-key="remarks" rows="2"${disabled ? " disabled" : ""} placeholder="Enter any additional information or remarks here...">${esc(payload.remarks || "")}</textarea></label>
@@ -1792,6 +1829,14 @@ function prefillInspectionRequest(detail) {
     reference: detail.point.standard_ref,
     scope: detail.point.title,
     category: "درخواست بازرسی",
+  };
+}
+
+function prefillInspectionRequestForLocation(detail, customerLocation) {
+  return {
+    ...prefillInspectionRequest(detail),
+    customer_location: customerLocation,
+    ...(customerLocation === "international" ? { location: "" } : {}),
   };
 }
 
@@ -2292,19 +2337,24 @@ async function onClick(event) {
     } else if (act === "cancel-in-form") {
       goBack();
       await render();
+    } else if (act === "search-location") {
+      const location = document.querySelector("[data-form-key='location']")?.value;
+      if (!location) throw new Error("Select an inspection location first.");
+      window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`, "_blank", "noopener,noreferrer");
     } else if (act === "add-form-row" || act === "remove-form-row") {
+      const englishForm = state.formSpec?.payload?.customer_location === "international";
       if (!state.formSpec) throw new Error("فرم برای ویرایش آماده نیست.");
       const table = state.formSpec.tables?.find((item) => item.key === node.dataset.table);
-      if (!table) throw new Error("جدول درخواستی در فرم تعریف نشده است.");
+      if (!table) throw new Error(englishForm ? "The requested table is unavailable." : "جدول درخواستی در فرم تعریف نشده است.");
       const payload = collectForm();
       const rows = [...(payload[table.key] || [])];
       if (act === "add-form-row") {
-        if (rows.length >= 100) throw new Error("حداکثر ۱۰۰ ردیف برای هر جدول مجاز است.");
+        if (rows.length >= 100) throw new Error(englishForm ? "Each table can contain up to 100 rows." : "حداکثر ۱۰۰ ردیف برای هر جدول مجاز است.");
         rows.push(Object.fromEntries(table.columns.map(({ key }) => [key, ""])));
       } else {
         const rowIndex = Number(node.dataset.row);
         if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= rows.length) {
-          throw new Error("ردیف انتخاب‌شده معتبر نیست.");
+          throw new Error(englishForm ? "The selected row is invalid." : "ردیف انتخاب‌شده معتبر نیست.");
         }
         if (rows.length <= 1) {
           rows[0] = Object.fromEntries(table.columns.map(({ key }) => [key, ""]));
@@ -2374,7 +2424,7 @@ async function onClick(event) {
       state.pointId = Number(firstEligiblePoint.id);
       const detail = await api(`/api/points/${state.pointId}`);
       state.requestPointId = state.pointId;
-      state.requestPrefill = { ...prefillInspectionRequest(detail), customer_location: state.requestCustomerLocation };
+      state.requestPrefill = prefillInspectionRequestForLocation(detail, state.requestCustomerLocation);
       navigateTo("forms");
       await render();
     } else if (act === "open-request-form") {
@@ -2386,7 +2436,7 @@ async function onClick(event) {
       state.requestCustomerLocation = node.dataset.location === "international"
         ? "international"
         : state.requestCustomerLocation || "iran";
-      state.requestPrefill = { ...prefillInspectionRequest(detail), customer_location: state.requestCustomerLocation };
+      state.requestPrefill = prefillInspectionRequestForLocation(detail, state.requestCustomerLocation);
       state.formKind = "in";
       state.formId = null;
       state.formDraft = null;
@@ -2404,8 +2454,7 @@ async function onClick(event) {
       state.inRequestMode = true;
       state.requestPointId = state.pointId;
       state.requestPrefill = {
-        ...prefillInspectionRequest(detail),
-        customer_location: state.requestCustomerLocation || "iran",
+        ...prefillInspectionRequestForLocation(detail, state.requestCustomerLocation || "iran"),
       };
       state.formKind = "in";
       state.formId = null;

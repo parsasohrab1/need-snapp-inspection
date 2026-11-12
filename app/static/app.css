@@ -918,6 +918,10 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
 .buyer-international .buyer-in-field { grid-template-columns: minmax(105px, 34%) minmax(0, 1fr); align-items: center; }
 .buyer-international > .buyer-in-field { grid-template-columns: 150px minmax(0, 1fr); }
 .buyer-international > .buyer-in-field.wide { grid-column: 1 / -1; }
+.buyer-in-country-control { display: flex; min-width: 0; gap: 7px; }
+.buyer-in-country-control select { flex: 1; }
+.buyer-location-search { width: 36px; min-width: 36px; border: 1px solid #d0d5dd; border-radius: 8px; color: #173d79; background: #f5f6f7; font-size: 22px; line-height: 1; }
+.buyer-location-search:disabled { opacity: .55; }
 .buyer-in-field input, .buyer-in-field select, .buyer-in-field textarea {
   width: 100%;
   min-width: 0;
