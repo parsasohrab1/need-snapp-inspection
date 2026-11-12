@@ -890,6 +890,8 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
 .buyer-progress-view { width: 25px; height: 25px; padding: 0; border: 1px solid #aac3df; border-radius: 50%; color: #236199; background: #edf6ff; font-size: 14px; }
 .buyer-progress-table tr[hidden] { display: none; }
 .buyer-in-top-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.buyer-in-point-select { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; max-width: 760px; margin: 0 0 8px auto; padding: 8px 11px; border: 1px solid #dfe4ec; border-radius: 9px; color: #1c2635; background: #fff; font-size: 13px; font-weight: 700; }
+.buyer-in-point-select select { width: 100%; min-width: 0; min-height: 34px; padding: 5px 8px; border: 1px solid #d0d5dd; border-radius: 7px; color: #202a39; background: #f5f6f7; }
 .buyer-in-formlayout { grid-template-columns: minmax(0, 1fr); }
 .buyer-in-sheet {
   display: grid;
@@ -1217,6 +1219,7 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
   .buyer-location-option { min-height: 70px; padding: 11px 13px; }
   .buyer-location-option b { font-size: 15px; }
   .buyer-in-entry { min-height: auto; padding: 18px 12px; }
+  .buyer-in-point-select { grid-template-columns: 1fr; gap: 5px; }
   .buyer-calendar-day { min-height: 32px; }
   .buyer-in-two-cards { grid-template-columns: 1fr; }
   .buyer-international .buyer-in-field, .buyer-international > .buyer-in-field { grid-template-columns: minmax(100px, 34%) minmax(0, 1fr); }

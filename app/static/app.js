@@ -29,7 +29,7 @@ const ROLE_LABEL = {
 };
 
 const app = document.querySelector("#app");
-const state = { me: null, view: "desk", viewHistory: [], formReturnView: "desk", inRequestMode: false, visitReportId: null, buyerRequestPanels: [false, false], toast: "", pointId: null, draft: {}, caption: "شاهد کارگاهی", kind: "project", formKind: "ivr", formId: null, formSpec: null, requestPointId: null, requestPrefill: null, requestCustomerLocation: null, formDraft: null, managerTab: "overview", inRegistrySearches: [{ search: "", filter: "all" }, { search: "", filter: "all" }], calendarOffset: 0, deskTimer: 0 };
+const state = { me: null, view: "desk", viewHistory: [], formReturnView: "desk", inRequestMode: false, visitReportId: null, buyerRequestPanels: [false, false], toast: "", pointId: null, draft: {}, caption: "شاهد کارگاهی", kind: "project", formKind: "ivr", formId: null, formSpec: null, requestPointId: null, requestPoints: [], requestPrefill: null, requestCustomerLocation: null, formDraft: null, managerTab: "overview", inRegistrySearches: [{ search: "", filter: "all" }, { search: "", filter: "all" }], calendarOffset: 0, deskTimer: 0 };
 
 function navigateTo(view) {
   if (state.view === view) return;
@@ -43,6 +43,7 @@ function resetFormState() {
   state.formId = null;
   state.formDraft = null;
   state.requestPointId = null;
+  state.requestPoints = [];
   state.requestPrefill = null;
   state.requestCustomerLocation = null;
 }
@@ -279,7 +280,7 @@ function shell(title, subtitle, body) {
         <div class="side-heading">${state.me.role === "buyer" ? "کارفرما" : esc(ROLE_LABEL[state.me.role] || "منوی اصلی")}</div>
         ${state.me.role === "buyer" ? `
           <div class="buyer-nav-group">
-            ${visibleItems.slice(0, 6).map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
+            ${visibleItems.slice(0, 6).map(([id, label]) => `<button class="navbtn ${state.view === id || (id === "buyer-new-international" && state.view === "forms" && state.requestCustomerLocation === "international") ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
             <details class="buyer-nav-reports" open>
               <summary class="navbtn ${["buyer-progress", "buyer-completed", "buyer-status"].includes(state.view) ? "active" : ""}">گزارش بازرسی</summary>
               ${visibleItems.slice(6, 9).map(([id, label]) => `<button class="navbtn nav-sub ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
@@ -949,6 +950,34 @@ async function renderBuyerNewIn() {
   if (international) state.requestCustomerLocation = "international";
   const board = await api("/api/board?kind=project");
   const eligible = board.filter((row) => ["draft", "documents_missing", "returned"].includes(row.request_status));
+  if (international) {
+    const firstEligiblePoint = eligible[0];
+    if (!firstEligiblePoint) {
+      state.requestPointId = null;
+      state.requestPoints = [];
+      state.requestPrefill = null;
+      state.inRequestMode = false;
+      app.innerHTML = shell(
+        "New International IN Registration",
+        "No inspection points are available for an international IN request.",
+        `<article class="card pad buyer-page buyer-in-entry-international" dir="ltr"><p>No inspection points are currently available for IN registration.</p></article>`
+      );
+      return;
+    }
+    state.requestPoints = eligible;
+    state.pointId = Number(firstEligiblePoint.id);
+    state.requestPointId = state.pointId;
+    const detail = await api(`/api/points/${state.pointId}`);
+    state.inRequestMode = true;
+    state.formKind = "in";
+    state.formId = null;
+    state.formDraft = null;
+    state.requestPrefill = prefillInspectionRequestForLocation(detail, "international");
+    state.formReturnView = "buyer-new-international";
+    state.view = "forms";
+    await renderForms();
+    return;
+  }
   const locations = [
     ["iran", "ثبت IN داخل کشور", "⌖", "ثبت درخواست بازرسی در پروژه‌های داخل کشور"],
     ["international", "ثبت IN خارج از کشور", "◎", "ثبت درخواست بازرسی در پروژه‌های خارج از کشور"],
@@ -1993,6 +2022,11 @@ async function renderForms() {
     : state.me.role === "executive_manager"
     ? [["in", "IN"], ["itp", "ITP"], ["ivr", "IVR"], ["mom", "MOM"]]
     : state.me.role === "buyer" ? [["in", "IN"]] : [["ivr", "IVR"]];
+  const internationalPointOptions = state.inRequestMode
+    && internationalIn
+    && state.requestPoints.length
+    ? `<label class="buyer-in-point-select"><span>Inspection Point:</span><select data-buyer-in-point>${state.requestPoints.map((point) => `<option value="${point.id}" ${Number(point.id) === Number(state.requestPointId) ? "selected" : ""}>${esc(point.tag)} · ${esc(point.title)} — ${esc(point.project_name)}</option>`).join("")}</select></label>`
+    : "";
   app.innerHTML = shell(
     buyerInRequest ? (internationalIn ? "New IN Registration" : "ثبت IN داخل کشور") : `${displaySheet.code} · ${displaySheet.title_fa}`,
     buyerInRequest ? (internationalIn ? "Inspection Notification" : "درخواست یادداشت بازرسی") : displaySheet.title,
@@ -2004,6 +2038,7 @@ async function renderForms() {
         <button class="ghost" data-act="print-form">چاپ</button>
         ${!viewOnly && (!state.inRequestMode || canSubmitRequest) ? `<button class="primary" data-act="save-form">${canSubmitRequest ? "ثبت نهایی IN و ارسال به کارتابل مدیر پروژه" : "ثبت جاهای پر شده"}</button>` : ""}
       </div>`}
+      ${internationalPointOptions}
       ${state.inRequestMode && !buyerInRequest ? inRequestPointChooser(requestBoard, state.requestPointId) : ""}
       ${state.inRequestMode && !state.requestPointId ? `<p class="chip wait">برای تکمیل فرم، ابتدا نقطهٔ بازرسی را از فهرست بالا انتخاب کنید.</p>` : ""}
       <div class="formlayout ${buyerInRequest ? "buyer-in-formlayout" : ""}">
@@ -2475,9 +2510,10 @@ async function onClick(event) {
       state.formId = null;
       state.formDraft = null;
       const requestBoard = await api(`/api/board?kind=${state.kind === "case" ? "case" : "project"}`);
-      const firstEligiblePoint = requestBoard.find((row) =>
+      state.requestPoints = requestBoard.filter((row) =>
         ["draft", "documents_missing", "returned"].includes(row.request_status)
       );
+      const firstEligiblePoint = state.requestPoints[0];
       if (!firstEligiblePoint) throw new Error("نقطه‌ای برای ثبت درخواست IN موجود نیست.");
       state.pointId = Number(firstEligiblePoint.id);
       const detail = await api(`/api/points/${state.pointId}`);
@@ -2491,6 +2527,7 @@ async function onClick(event) {
       const detail = await api(`/api/points/${state.pointId}`);
       state.inRequestMode = true;
       state.requestPointId = state.pointId;
+      state.requestPoints = [];
       state.requestCustomerLocation = node.dataset.location === "international"
         ? "international"
         : state.requestCustomerLocation || "iran";
@@ -2621,6 +2658,7 @@ async function onClick(event) {
         state.inRequestMode = false;
         state.requestPrefill = null;
         state.requestCustomerLocation = null;
+        state.requestPoints = [];
         state.formDraft = null;
         state.view = "point";
         toast(result.request_status === "documents_missing" ? result.message : "درخواست IN برای مدیر پروژه ارسال شد");
@@ -2832,6 +2870,26 @@ app.addEventListener("change", async (event) => {
   const registryFilter = event.target.closest("[data-in-filter]");
   if (registryFilter) {
     filterInRegistry(registryFilter.closest(".in-registry"));
+    return;
+  }
+  const requestPoint = event.target.closest("[data-buyer-in-point]");
+  if (requestPoint) {
+    try {
+      const currentPayload = collectForm();
+      const pointId = Number(requestPoint.value);
+      if (!Number.isInteger(pointId) || !state.requestPoints.some((point) => Number(point.id) === pointId)) {
+        throw new Error("Please select a valid inspection point.");
+      }
+      const detail = await api(`/api/points/${pointId}`);
+      const prefill = prefillInspectionRequestForLocation(detail, "international");
+      state.pointId = pointId;
+      state.requestPointId = pointId;
+      state.requestPrefill = prefill;
+      state.formDraft = { ...currentPayload, ...prefill };
+      await renderForms();
+    } catch (error) {
+      toast(error.message);
+    }
     return;
   }
   const formLocation = event.target.closest("[data-form-key='customer_location']");
