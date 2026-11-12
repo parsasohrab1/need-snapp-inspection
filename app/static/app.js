@@ -29,7 +29,7 @@ const ROLE_LABEL = {
 };
 
 const app = document.querySelector("#app");
-const state = { me: null, view: "desk", viewHistory: [], formReturnView: "desk", inRequestMode: false, visitReportId: null, buyerRequestPanels: [false, false], toast: "", pointId: null, draft: {}, caption: "شاهد کارگاهی", kind: "project", formKind: "ivr", formId: null, formSpec: null, requestPointId: null, requestPrefill: null, formDraft: null, managerTab: "overview", deskTimer: 0 };
+const state = { me: null, view: "desk", viewHistory: [], formReturnView: "desk", inRequestMode: false, visitReportId: null, buyerRequestPanels: [false, false], toast: "", pointId: null, draft: {}, caption: "شاهد کارگاهی", kind: "project", formKind: "ivr", formId: null, formSpec: null, requestPointId: null, requestPrefill: null, requestCustomerLocation: null, formDraft: null, managerTab: "overview", inRegistrySearches: [{ search: "", filter: "all" }, { search: "", filter: "all" }], calendarOffset: 0, deskTimer: 0 };
 
 function navigateTo(view) {
   if (state.view === view) return;
@@ -44,6 +44,7 @@ function resetFormState() {
   state.formDraft = null;
   state.requestPointId = null;
   state.requestPrefill = null;
+  state.requestCustomerLocation = null;
 }
 
 function goBack() {
@@ -201,15 +202,31 @@ function shell(title, subtitle, body) {
     ["moms", "صورتجلسه‌ها"],
     ["forms", "فرم‌ها"],
     ["notifications", "اعلان‌ها"],
+    ["calendar", "تقویم"],
     ["archive", "آرشیو بازرسی"],
     ["people", state.me.role === "buyer" ? "بازرسی‌های انجام‌شده توسط این شرکت" : "بازرسان"],
     ["wallet", "تسویه"],
     ["benchmark", "بنچ‌مارک"],
     ["technology", "تکنولوژی"],
   ];
-  const visibleItems = state.me.role === "buyer"
-    ? items.filter(([id]) => !["dispatch", "forms", "benchmark", "technology"].includes(id))
-    : items;
+  const buyerItems = [
+    ["desk", "میز کار"],
+    ["buyer-new-in", "ثبت IN جدید"],
+    ["buyer-in-list", "مشاهده INهای ثبت‌شده"],
+    ["buyer-itp-new", "ثبت ITP جدید"],
+    ["buyer-itp-list", "مشاهده ITPهای ثبت‌شده"],
+    ["buyer-progress", "بازرسی‌های در حال انجام"],
+    ["buyer-completed", "بازرسی‌های انجام‌شده"],
+    ["buyer-status", "صورت‌وضعیت بازرسی"],
+    ["buyer-date", "تبدیل تاریخ"],
+    ["calendar", "تقویم"],
+    ["docs", "مدارک پروژه"],
+    ["moms", "صورتجلسه‌ها"],
+    ["notifications", "اعلان‌ها"],
+    ["buyer-bills", "صورت‌وضعیت و فاکتور"],
+    ["archive", "آرشیو بازرسی"],
+  ];
+  const visibleItems = state.me.role === "buyer" ? buyerItems : items;
   if (state.me.role === "vendor") {
     const vendorItems = new Set(["desk", "docs", "notifications"]);
     for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
@@ -223,9 +240,22 @@ function shell(title, subtitle, body) {
   if (state.me.role === "inspector") visibleItems.splice(2, 0, ["record", "کارنامه بازرسی"]);
   return `
     <div class="shell">
+      <header class="app-header">
+        <div class="app-brand"><img src="/static/logo.png" alt="تکین‌کو؛ شرکت بازرسی فنی و کنترل خوردگی"><span><b>اسنپ‌بازرس</b><small>بازرسی و کنترل کیفیت</small></span></div>
+        <h1>${esc(title)}</h1>
+        <div class="app-header-status"><span class="live-indicator"></span><span>سامانهٔ زنده</span></div>
+      </header>
       <aside class="side">
-        <div class="brand"><div class="mark">ب</div><div><b>اسنپ‌بازرس</b><small>ITP تا IVR</small></div></div>
-        ${visibleItems.map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
+        <div class="side-heading">${state.me.role === "buyer" ? "کارفرما" : esc(ROLE_LABEL[state.me.role] || "منوی اصلی")}</div>
+        ${state.me.role === "buyer" ? `
+          <div class="buyer-nav-group">
+            ${visibleItems.slice(0, 5).map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
+            <details class="buyer-nav-reports" open>
+              <summary class="navbtn ${["buyer-progress", "buyer-completed", "buyer-status"].includes(state.view) ? "active" : ""}">گزارش بازرسی</summary>
+              ${visibleItems.slice(5, 8).map(([id, label]) => `<button class="navbtn nav-sub ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
+            </details>
+            ${visibleItems.slice(8).map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
+          </div>` : visibleItems.map(([id, label]) => `<button class="navbtn ${state.view === id ? "active" : ""}" data-act="goto" data-view="${id}">${label}</button>`).join("")}
         <div class="spacer"></div>
         <div class="who">${esc(state.me.name)}<br>${esc(ROLE_LABEL[state.me.role] || state.me.role)}${state.me.company ? `<br>${esc(state.me.company)}` : ""}</div>
         <button class="navbtn" data-act="logout">خروج</button>
@@ -245,36 +275,60 @@ function shell(title, subtitle, body) {
 
 function login() {
   const roles = [
+    ["inspector.reza", "بازرس", "پذیرش اعزام و ثبت گزارش بازرسی"],
     ["buyer", "کارفرما", "ثبت فرم IN و پیگیری درخواست بازرسی"],
-    ["manager", "مدیر پروژه", "بررسی درخواست کارفرما و ارجاع به مدیر واحد"],
+    ["manager", "مدیر پروژه", "بررسی درخواست و ارجاع به مدیر واحد"],
+    ["coordinator", "هماهنگ‌کننده", "مدیریت اعزام و پیگیری گزارش‌ها"],
     ["unit.manager", "مدیر واحد", "تأیید تخصصی و ارسال پیشنهاد برای بازرس"],
-    ["executive", "مدیر اجرایی", "تأیید نهایی و دسترسی کامل به فرم‌ها"],
-    ["coordinator", "هماهنگ‌کننده اعزام", "پیگیری اعزام و گزارش‌های بازرسی"],
-    ["inspector.reza", "بازرس جوش", "پذیرش پیشنهاد، حضور در کارگاه، IVR"],
   ];
   app.innerHTML = `
     ${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ""}
     <div class="login">
       <section class="hero">
-        <div class="mark">ب</div>
-        <h1>بازرس، مثل سفر، پیشنهاد می‌گیرد.</h1>
-        <p>برای هر نقطه ITP، مدارک باید آماده باشد. بعد سامانه به بازرس واجد شرایط و نزدیک کارگاه پیشنهاد می‌دهد. گزارش IVR با عکس، موقعیت و چک‌لیست بسته می‌شود.</p>
-        <div class="steps">
-          <div><span>۱</span> سازنده آمادگی نقطه را اعلام می‌کند</div>
-          <div><span>۲</span> نزدیک‌ترین بازرس واجد شرایط اول درخواست را می‌بیند</div>
-          <div><span>۳</span> هر بازرس ۳۰ دقیقه برای پذیرش فرصت دارد؛ سپس نفر بعدی</div>
-          <div><span>۴</span> حضور در شعاع کارگاه، سپس IVR</div>
+        <div class="login-brand"><img src="/static/logo.png" alt="تکین‌کو؛ شرکت بازرسی فنی و کنترل خوردگی"></div>
+        <div class="login-hero-copy">
+          <p class="login-slogan">کیفیت، اعتماد، توسعهٔ پایدار</p>
+          <span class="hero-rule"></span>
+          <h1>بازرسی هوشمند<br>برای صنعتی مطمئن</h1>
+          <p>تمام مراحل بازرسی، از ثبت درخواست تا گزارش نهایی، در یک سامانهٔ یکپارچه و شفاف.</p>
+        </div>
+        <div class="login-features">
+          <div><span>◇</span><b>کنترل کیفیت</b></div>
+          <div><span>▤</span><b>گزارش‌گیری دقیق</b></div>
+          <div><span>⇄</span><b>شفافیت و اعتماد</b></div>
+          <div><span>⚙</span><b>مدیریت هوشمند</b></div>
         </div>
       </section>
       <section class="panel">
-        <h2>ورود به طرح فلامینگو</h2>
-        <p class="hint">محیط اعتبارسنجی با کارگاه ماشین‌سازی البرز در کرج، هشت بازرس و چهل نقطه بازرسی.</p>
-        <div class="roles">
-          ${roles.map(([user, name, text]) => `<button class="role" data-act="login" data-user="${user}"><b>${name}</b><small>${text}</small></button>`).join("")}
+        <div class="login-form-wrap">
+          <div class="login-form-heading"><span class="login-heading-icon">↪</span><h2>ورود به سامانه</h2></div>
+          <p class="login-company">سامانهٔ یکپارچهٔ بازرسی فنی</p>
+          <form id="login-form" class="login-form">
+            <label class="login-field"><span>نام کاربری</span><span class="login-input-wrap"><input id="login-username" name="username" autocomplete="username" value="inspector.reza" required><b aria-hidden="true">♙</b></span></label>
+            <label class="login-field"><span>رمز عبور</span><span class="login-input-wrap"><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="رمز عبور خود را وارد کنید" required><b aria-hidden="true">▣</b></span></label>
+            <label class="login-field"><span>نقش کاربری</span><span class="login-role-wrap"><b aria-hidden="true">♟</b><select id="login-role" name="role" size="5" aria-label="انتخاب نقش کاربری">${roles.map(([user, name, description], index) => `<option value="${esc(user)}" data-description="${esc(description)}" ${index === 0 ? "selected" : ""}>${name}</option>`).join("")}</select></span></label>
+            <p class="login-role-description">${esc(roles[0][2])}</p>
+            <button class="login-submit" type="submit"><span>ورود</span><b aria-hidden="true">⇥</b></button>
+            <p class="login-demo-hint">حساب نمایشی: گذرواژهٔ <bdi dir="ltr">demo1234</bdi></p>
+          </form>
         </div>
-        <div class="pass">گذرواژه همه حساب‌های نمایشی: demo1234</div>
       </section>
     </div>`;
+  const roleSelect = document.querySelector("#login-role");
+  roleSelect.addEventListener("change", () => {
+    document.querySelector("#login-username").value = roleSelect.value;
+    document.querySelector(".login-role-description").textContent = roleSelect.selectedOptions[0].dataset.description;
+  });
+}
+
+async function loginWithCredentials() {
+  const username = document.querySelector("#login-username")?.value.trim();
+  const password = document.querySelector("#login-password")?.value;
+  if (!username || !password) throw new Error("نام کاربری و رمز عبور را وارد کنید.");
+  state.me = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+  state.viewHistory = [];
+  state.view = state.me.role === "inspector" ? "dispatch" : "desk";
+  await render();
 }
 
 function ring(percent) {
@@ -521,35 +575,64 @@ function requestStatusLabel(status) {
   }[status] || status);
 }
 
-function inRequestRows(forms) {
-  return (forms || []).map((form) => `
-    <tr>
-      <td>${esc(form.number || "—")}</td>
-      <td>${esc(form.buyer)}</td>
-      <td>${esc(form.project)}</td>
-      <td>${esc(form.tag)} · ${esc(form.title)}</td>
-      <td>${esc(requestStatusLabel(form.request_status))}${form.request_note ? `<small>${esc(form.request_note)}</small>` : ""}</td>
-      <td>
-        <button class="ghost" data-act="open-sheet" data-id="${form.form_id}" data-kind="in">مشاهده IN</button>
-        <button class="ghost" data-act="open-point" data-id="${form.point_id}">جزئیات و تأیید</button>
-      </td>
-    </tr>`).join("");
+function filterInRegistry(registry) {
+  if (!registry) return;
+  const search = registry.querySelector("[data-in-search]");
+  const filter = registry.querySelector("[data-in-filter]");
+  const registryIndex = [...app.querySelectorAll(".in-registry")].indexOf(registry);
+  if (registryIndex >= 0) {
+    state.inRegistrySearches[registryIndex] = { search: search?.value || "", filter: filter?.value || "all" };
+  }
+  const query = search?.value.trim().toLocaleLowerCase("fa-IR") || "";
+  const field = filter?.value || "all";
+  const fields = field === "all" ? ["date", "number", "buyer", "project", "point", "status"] : [field];
+  const rows = [...registry.querySelectorAll("[data-in-row]")];
+  let visible = 0;
+  rows.forEach((row) => {
+    const matches = !query || fields.some((key) => (row.dataset[key] || "").toLocaleLowerCase("fa-IR").includes(query));
+    row.hidden = !matches;
+    if (matches) visible += 1;
+  });
+  const empty = registry.querySelector(".registry-no-results");
+  if (empty) empty.hidden = visible > 0;
+  const count = registry.querySelector(".registry-count");
+  if (count) count.textContent = `${visible.toLocaleString("fa-IR")} از ${rows.length.toLocaleString("fa-IR")} درخواست`;
 }
 
 function managerInRequests(forms) {
   const received = forms.filter((form) => form.request_status === "manager_review");
   const sent = forms.filter((form) => !["manager_review", "draft"].includes(form.request_status));
-  const table = (rows, empty) => `<div class="tablewrap"><table><thead><tr><th>شماره IN</th><th>کارفرما</th><th>پروژه</th><th>تجهیز / نقطه</th><th>وضعیت پایپ‌لاین</th><th>اقدام</th></tr></thead><tbody>${inRequestRows(rows) || `<tr><td colspan="6">${empty}</td></tr>`}</tbody></table></div>`;
+  const table = (rows, empty, index) => {
+    const saved = state.inRegistrySearches[index] || { search: "", filter: "all" };
+    return `<div class="in-registry">
+    <div class="registry-toolbar">
+      <label class="registry-search"><span aria-hidden="true">⌕</span><input type="search" data-in-search value="${esc(saved.search)}" placeholder="جست‌وجو در INهای ثبت‌شده…" aria-label="جست‌وجو در INهای ثبت‌شده"></label>
+      <label class="registry-filter"><span>جست‌وجو بر اساس</span><select data-in-filter aria-label="فیلتر فهرست IN">
+        <option value="all" ${saved.filter === "all" ? "selected" : ""}>همهٔ موارد</option><option value="date" ${saved.filter === "date" ? "selected" : ""}>تاریخ</option><option value="number" ${saved.filter === "number" ? "selected" : ""}>شماره IN</option>
+        <option value="buyer" ${saved.filter === "buyer" ? "selected" : ""}>کارفرما</option><option value="project" ${saved.filter === "project" ? "selected" : ""}>پروژه</option><option value="point" ${saved.filter === "point" ? "selected" : ""}>تجهیز / نقطه</option><option value="status" ${saved.filter === "status" ? "selected" : ""}>وضعیت</option>
+      </select></label>
+      <span class="registry-count">${rows.length.toLocaleString("fa-IR")} درخواست</span>
+    </div>
+    <div class="tablewrap"><table class="in-table"><thead><tr><th>وضعیت</th><th>نام کارفرما</th><th>پروژه</th><th>تاریخ</th><th>شماره IN</th><th>اقدام</th></tr></thead><tbody>
+      ${rows.map((form) => `<tr data-in-row data-date="${esc(form.date || "")}" data-number="${esc(form.number || "")}" data-buyer="${esc(form.buyer)}" data-project="${esc(form.project)}" data-point="${esc(`${form.tag} ${form.title}`)}" data-status="${esc(requestStatusLabel(form.request_status))}">
+        <td><span class="request-status">${esc(requestStatusLabel(form.request_status))}</span></td>
+        <td>${esc(form.buyer)}</td><td>${esc(form.project)}</td><td dir="ltr">${esc(form.date || "—")}</td><td dir="ltr">${esc(form.number || "—")}</td>
+        <td><div class="registry-actions"><button class="ghost" data-act="open-sheet" data-id="${form.form_id}" data-kind="in">مشاهده IN</button><button class="ghost" data-act="open-point" data-id="${form.point_id}">جزئیات</button></div></td>
+      </tr>`).join("") || `<tr><td colspan="6">${empty}</td></tr>`}
+      <tr class="registry-no-results" hidden><td colspan="6">موردی با این جست‌وجو پیدا نشد.</td></tr>
+    </tbody></table></div>
+  </div>`;
+  };
   return `<section class="grid2">
     <article class="card pad">
       <h3>دریافت IN از کارفرما <span class="chip">${received.length.toLocaleString("fa-IR")}</span></h3>
       <p class="hint">پس از بررسی فرم و ثبت مهر و امضای مدیر پروژه، درخواست به کارتابل مدیر واحد منتقل می‌شود.</p>
-      ${table(received, "درخواست جدیدی از کارفرما در انتظار بررسی نیست.")}
+      ${table(received, "درخواست جدیدی از کارفرما در انتظار بررسی نیست.", 0)}
     </article>
     <article class="card pad">
       <h3>ارسال IN به مدیر واحد و مراحل بعد <span class="chip">${sent.length.toLocaleString("fa-IR")}</span></h3>
       <p class="hint">وضعیت درخواست‌های ارجاع‌شده به مدیر واحد و درخواست‌هایی که پس از تأیید او وارد اسنپ شده‌اند.</p>
-      ${table(sent, "هنوز درخواستی از مرحلهٔ مدیر پروژه عبور نکرده است.")}
+      ${table(sent, "هنوز درخواستی از مرحلهٔ مدیر پروژه عبور نکرده است.", 1)}
     </article>
   </section>`;
 }
@@ -648,7 +731,7 @@ async function renderManagerDesk() {
     ["rejected", "ردشده‌ها و دلیل رد"],
     ["missing", "نواقص مدارک"],
     ["unfinished", "انجام‌نشده / معوقه"],
-    ["requests", "درخواست‌های IN"],
+    ["requests", "مشاهده INهای ثبت‌شده"],
     ["claims", "صورت‌وضعیت و Claim"],
   ];
   const bodyByTab = {
@@ -689,6 +772,9 @@ async function renderManagerDesk() {
       ${bodyByTab[activeTab] || bodyByTab.overview}
     </div>`
   );
+  if (activeTab === "requests") {
+    app.querySelectorAll(".in-registry").forEach(filterInRegistry);
+  }
   clearTimeout(state.deskTimer);
   state.deskTimer = setTimeout(() => {
     if (state.view === "desk" && ["manager", "executive_manager"].includes(state.me?.role)) render();
@@ -736,6 +822,210 @@ async function renderUnitManagerDesk() {
   }, 6000);
 }
 
+function buyerCalendarPreview(moments) {
+  const start = persianMonthStart(state.calendarOffset);
+  const monthParts = persianDateParts(start);
+  const monthTitle = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    month: "long",
+    year: "numeric",
+    timeZone: "Asia/Tehran",
+  }).format(start);
+  const days = [];
+  const cursor = new Date(start);
+  while (true) {
+    const parts = persianDateParts(cursor);
+    if (parts.year !== monthParts.year || parts.month !== monthParts.month) break;
+    days.push({ key: persianDateKey(cursor), day: parts.day });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  const eventDates = new Set(moments.map((moment) => String(moment.held_on || "").slice(0, 10)));
+  const firstOffset = (start.getDay() + 1) % 7;
+  return `<div class="buyer-calendar-heading"><h3>${esc(monthTitle)}</h3><button class="ghost" data-act="goto" data-view="calendar">مشاهدهٔ تقویم</button></div>
+    <div class="buyer-calendar-grid buyer-calendar-weekdays">${["ش", "ی", "د", "س", "چ", "پ", "ج"].map((day) => `<b>${day}</b>`).join("")}</div>
+    <div class="buyer-calendar-grid">${Array.from({ length: firstOffset }, () => `<span class="buyer-calendar-day blank"></span>`).join("")}
+      ${days.map(({ key, day }) => `<span class="buyer-calendar-day ${key === persianDateKey(new Date()) ? "today" : ""} ${eventDates.has(key) ? "has-event" : ""}">${day.toLocaleString("fa-IR")}</span>`).join("")}
+    </div>`;
+}
+
+function buyerBoardTable(rows, emptyMessage = "موردی برای نمایش وجود ندارد.") {
+  const requestLabels = {
+    draft: "پیش‌نویس", documents_missing: "نقص مدارک", returned: "مرجوع‌شده برای اصلاح",
+    manager_review: "بررسی مدیر پروژه", unit_review: "بررسی مدیر واحد",
+    executive_review: "بررسی مدیر اجرایی", inspection_queue: "در صف بازرسی",
+    approved: "تأیید و ارسال به بازرس", approved_no_inspector: "تأییدشده؛ در انتظار بازرس",
+  };
+  const pointLabels = {
+    planned: "برنامه‌ریزی‌شده", ready: "آماده", offering: "پیشنهاد به بازرس",
+    assigned: "پذیرفته‌شده", en_route: "در مسیر", on_site: "در محل",
+    submitted: "در انتظار تأیید گزارش", accepted: "تکمیل‌شده",
+  };
+  return `<div class="tablewrap"><table><thead><tr><th>پروژه</th><th>تجهیز / نقطه</th><th>وضعیت درخواست IN</th><th>وضعیت بازرسی</th><th>پیگیری</th></tr></thead><tbody>
+    ${rows.map((row) => `<tr>
+      <td>${esc(row.project_name)}</td><td>${esc(row.tag)} · ${esc(row.title)}</td>
+      <td>${esc(requestLabels[row.request_status] || row.request_status || "—")}</td>
+      <td>${esc(pointLabels[row.status] || row.status || "—")}</td>
+      <td class="actions">${row.request_form_id ? `<button class="ghost" data-act="open-sheet" data-id="${row.request_form_id}" data-kind="in">مشاهده IN</button>` : ""}
+        <button class="ghost" data-act="open-point" data-id="${row.id}">جزئیات</button></td>
+    </tr>`).join("") || `<tr><td colspan="5">${emptyMessage}</td></tr>`}
+  </tbody></table></div>`;
+}
+
+async function renderBuyerDesk() {
+  const [board, moments] = await Promise.all([api("/api/board?kind=project"), api("/api/moms")]);
+  const activeRequestStatuses = new Set([
+    "manager_review", "unit_review", "executive_review", "inspection_queue", "approved", "approved_no_inspector",
+  ]);
+  const inProgressStatuses = new Set(["offering", "assigned", "en_route", "on_site"]);
+  const activeIn = board.filter((row) => row.request_form_id && activeRequestStatuses.has(row.request_status)).length;
+  const activeInspections = board.filter((row) => inProgressStatuses.has(row.status)).length;
+  const todayTasks = board.filter((row) =>
+    ["manager_review", "unit_review", "executive_review", "submitted"].includes(row.request_status)
+      || row.status === "submitted"
+  ).length;
+  const today = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Tehran",
+  }).format(new Date());
+  const reminders = [...moments].sort((a, b) => String(a.held_on).localeCompare(String(b.held_on))).slice(0, 3);
+  app.innerHTML = shell(
+    "میز کار کارفرما",
+    "نمای کلی درخواست‌ها، برنامهٔ روزانه و پیگیری بازرسی‌ها",
+    `<div class="buyer-dashboard">
+      <section class="buyer-welcome">
+        <div><p class="eyebrow">داشبورد کارفرما</p><h2>خوش آمدید، ${esc(state.me.name)}</h2><p>${esc(today)}</p></div>
+        <button class="primary" data-act="goto" data-view="buyer-new-in">ثبت درخواست بازرسی جدید</button>
+      </section>
+      <section class="buyer-kpis">
+        <button class="buyer-kpi tone-amber" data-act="goto" data-view="buyer-status"><span>وظایف و موارد نیازمند پیگیری</span><strong>${todayTasks.toLocaleString("fa-IR")}</strong><small>درخواست‌های در انتظار بررسی</small></button>
+        <button class="buyer-kpi tone-blue" data-act="goto" data-view="buyer-in-list"><span>INهای فعال</span><strong>${activeIn.toLocaleString("fa-IR")}</strong><small>ثبت‌شده و در گردش کار</small></button>
+        <button class="buyer-kpi tone-green" data-act="goto" data-view="buyer-progress"><span>بازرسی‌های در حال انجام</span><strong>${activeInspections.toLocaleString("fa-IR")}</strong><small>از پذیرش تا ثبت گزارش</small></button>
+      </section>
+      <section class="buyer-dashboard-grid">
+        <article class="card pad buyer-calendar-card">${buyerCalendarPreview(moments)}</article>
+        <article class="card pad buyer-reminders">
+          <div class="buyer-calendar-heading"><h3>یادآورها و صورتجلسه‌ها</h3><button class="ghost" data-act="goto" data-view="moms">همهٔ صورتجلسه‌ها</button></div>
+          ${reminders.map((item) => `<div class="buyer-reminder"><span>${esc(item.held_on)}</span><b>${esc(item.title)}</b><small>${esc(item.attendees || "شرکت‌کنندگان ثبت نشده‌اند")}</small></div>`).join("") || `<p class="empty">یادداشتی ثبت نشده است.</p>`}
+          <div class="buyer-quick-links"><button class="ghost" data-act="goto" data-view="buyer-progress">گزارش بازرسی‌های جاری</button><button class="ghost" data-act="goto" data-view="buyer-completed">گزارش بازرسی‌های تکمیل‌شده</button></div>
+        </article>
+      </section>
+    </div>`
+  );
+}
+
+async function renderBuyerNewIn() {
+  const board = await api("/api/board?kind=project");
+  const eligible = board.filter((row) => ["draft", "documents_missing", "returned"].includes(row.request_status));
+  const locations = [
+    ["iran", "ثبت IN داخل کشور", "⌖", "ثبت درخواست بازرسی در پروژه‌های داخل کشور"],
+    ["international", "ثبت IN خارج از کشور", "◎", "ثبت درخواست بازرسی در پروژه‌های خارج از کشور"],
+  ];
+  app.innerHTML = shell(
+    "ثبت IN جدید",
+    "برای شروع، موقعیت پروژه را انتخاب کنید",
+    `<div class="buyer-page buyer-in-entry">
+      <section class="buyer-in-location">
+        <p class="eyebrow">درخواست بازرسی جدید</p>
+        <h2>موقعیت پروژه را انتخاب کنید</h2>
+        <p>پس از انتخاب موقعیت، نقطهٔ بازرسی را برگزینید و فرم IN را تکمیل کنید.</p>
+        <div class="buyer-location-options">${locations.map(([key, title, icon, description]) => `<button class="buyer-location-option ${state.requestCustomerLocation === key ? "selected" : ""}" data-act="choose-in-location" data-location="${key}" aria-pressed="${state.requestCustomerLocation === key}">
+          <span class="buyer-location-icon" aria-hidden="true">${icon}</span><span><b>${title}</b><small>${description}</small></span><span class="buyer-location-arrow" aria-hidden="true">←</span>
+        </button>`).join("")}</div>
+      </section>
+      ${state.requestCustomerLocation ? `<article class="card pad buyer-point-list">
+        <div class="buyer-page-intro"><div><h3>انتخاب نقطهٔ بازرسی</h3><p>فرم IN برای ${state.requestCustomerLocation === "international" ? "پروژهٔ خارج از کشور" : "پروژهٔ داخل کشور"} تکمیل خواهد شد.</p></div><span class="buyer-count">${eligible.length.toLocaleString("fa-IR")} نقطه</span></div>
+        ${eligible.map((row) => `<div class="buyer-point-row"><span><b>${esc(row.tag)} · ${esc(row.title)}</b><small>${esc(row.project_name)} · ${esc(row.discipline_label)} · ${esc(row.request_status === "returned" ? "مرجوع‌شده برای اصلاح" : row.request_status === "documents_missing" ? "نقص مدارک" : "آماده ثبت IN")}</small></span><button class="primary" data-act="open-request-form" data-id="${row.id}" data-location="${state.requestCustomerLocation}">${row.request_status === "returned" ? "اصلاح فرم IN" : "تکمیل فرم IN"}</button></div>`).join("") || `<p class="empty">نقطه‌ای برای ثبت درخواست IN موجود نیست.</p>`}
+      </article>` : ""}
+    </div>`
+  );
+}
+
+async function renderBuyerInList() {
+  const board = await api("/api/board?kind=project");
+  const rows = board.filter((row) => row.request_status !== "draft");
+  app.innerHTML = shell(
+    "INهای ثبت‌شده",
+    "فهرست درخواست‌های ارسال‌شده و وضعیت گردش کار آن‌ها",
+    `<article class="card pad buyer-page">${buyerBoardTable(rows, "هنوز درخواست IN ثبت نشده است.")}</article>`
+  );
+}
+
+async function renderBuyerItpList() {
+  const board = await api("/api/board?kind=project");
+  app.innerHTML = shell(
+    "ITPهای ثبت‌شده",
+    "برنامهٔ نقاط بازرسی پروژه‌ها و وضعیت هر نقطه",
+    `<div class="buyer-page"><article class="card pad buyer-page-intro"><div><h2>نقاط برنامهٔ بازرسی</h2><p>این فهرست، نقاط برنامه‌ریزی‌شدهٔ ITP را از گردش کار پروژه نمایش می‌دهد.</p></div><button class="ghost" data-act="goto" data-view="buyer-itp-new">ثبت ITP جدید</button></article><article class="card pad">${buyerBoardTable(board)}</article></div>`
+  );
+}
+
+function renderBuyerItpNew() {
+  app.innerHTML = shell(
+    "ثبت ITP جدید",
+    "راهنمای ثبت و گردش برنامهٔ بازرسی و آزمون",
+    `<article class="card pad buyer-itp-notice"><span class="chip wait">ثبت ITP در نقش کارفرما غیرفعال است</span><h2>ثبت ITP توسط سازنده انجام می‌شود</h2><p>فرم ثبت ITP در نسخهٔ فعلی برای نقش مدیر اجرایی تعریف شده است. این صفحه دسترسی ثبت را تغییر نمی‌دهد؛ می‌توانید نقاط برنامهٔ ITP و وضعیت آن‌ها را مشاهده کنید.</p><button class="primary" data-act="goto" data-view="buyer-itp-list">مشاهدهٔ نقاط ITP ثبت‌شده</button></article>`
+  );
+}
+
+async function renderBuyerProgress() {
+  const board = await api("/api/board?kind=project");
+  const rows = board.filter((row) =>
+    ["offering", "assigned", "en_route", "on_site", "submitted"].includes(row.status)
+      || ["manager_review", "unit_review", "executive_review", "inspection_queue", "approved", "approved_no_inspector"].includes(row.request_status)
+  );
+  app.innerHTML = shell(
+    "بازرسی‌های در حال انجام",
+    "درخواست‌های در گردش و نقاطی که هنوز به نتیجهٔ نهایی نرسیده‌اند",
+    `<article class="card pad buyer-page">${buyerBoardTable(rows, "بازرسی در حال انجامی وجود ندارد.")}</article>`
+  );
+}
+
+async function renderBuyerCompleted() {
+  const rows = await api("/api/company/inspections");
+  app.innerHTML = shell(
+    "بازرسی‌های انجام‌شده",
+    "گزارش بازرسی پروژه‌های کارفرما و وضعیت تأیید نهایی",
+    `<article class="card pad buyer-page"><div class="tablewrap"><table><thead><tr><th>گزارش</th><th>پروژه</th><th>تجهیز / نقطه</th><th>بازرس</th><th>نتیجه</th><th>تأیید کارفرما</th><th>تاریخ ثبت</th><th></th></tr></thead><tbody>
+      ${rows.map((row) => `<tr><td>${esc(row.ivr_no)}</td><td>${esc(row.project)}</td><td>${esc(row.tag)} · ${esc(row.title)}</td><td>${esc(row.inspector)}</td><td>${esc(row.result_label)}${row.client_rejection_note ? `<small>${esc(row.client_rejection_note)}</small>` : ""}</td><td>${row.client_approved ? "تأییدشده" : row.client_rejection_note ? "ردشده" : "در انتظار"}</td><td>${esc(faWhen(row.submitted_at).date)}</td><td><button class="ghost" data-act="open-ivr" data-id="${row.visit_id}">مشاهده</button></td></tr>`).join("") || `<tr><td colspan="8">بازرسی انجام‌شده‌ای برای شرکت ثبت نشده است.</td></tr>`}
+    </tbody></table></div></article>`
+  );
+}
+
+async function renderBuyerStatus() {
+  const board = await api("/api/board?kind=project");
+  const statuses = [
+    ["manager_review", "در انتظار بررسی مدیر پروژه"], ["unit_review", "در انتظار بررسی مدیر واحد"],
+    ["executive_review", "در انتظار بررسی مدیر اجرایی"], ["inspection_queue", "در صف بازرسی"],
+    ["approved", "تأیید و ارسال به بازرس"], ["approved_no_inspector", "تأییدشده؛ در انتظار بازرس"],
+    ["offering", "پیشنهاد به بازرس"], ["assigned", "بازرس پذیرفته"], ["en_route", "بازرس در مسیر"],
+    ["on_site", "بازرس در محل"], ["submitted", "گزارش در انتظار بررسی"], ["accepted", "بازرسی تکمیل‌شده"],
+  ];
+  app.innerHTML = shell(
+    "صورت‌وضعیت بازرسی",
+    "خلاصهٔ نقاط پروژه بر اساس وضعیت جاری",
+    `<div class="buyer-page buyer-status-grid">${statuses.map(([key, label]) => {
+      const count = board.filter((row) => row.request_status === key || row.status === key).length;
+      return `<article class="card pad buyer-status-card"><span>${label}</span><strong>${count.toLocaleString("fa-IR")}</strong></article>`;
+    }).join("")}</div>`
+  );
+}
+
+function renderBuyerDate() {
+  const today = new Date().toISOString().slice(0, 10);
+  app.innerHTML = shell(
+    "تبدیل تاریخ",
+    "مشاهدهٔ معادل شمسی و میلادی",
+    `<article class="card pad buyer-date-card"><h2>مبدل تاریخ</h2><label>تاریخ میلادی<input id="buyer-date-input" type="date" value="${today}"></label><button class="primary" data-act="convert-date">تبدیل تاریخ</button><p class="buyer-date-result" id="buyer-date-result">تاریخ شمسی: ${new Intl.DateTimeFormat("fa-IR-u-ca-persian", { dateStyle: "long", timeZone: "Asia/Tehran" }).format(new Date())}</p></article>`
+  );
+}
+
+async function renderBuyerBills() {
+  const bills = await api("/api/bills");
+  app.innerHTML = shell(
+    "صورت‌وضعیت و فاکتور",
+    "اسناد مالی مربوط به بازرسی‌های تأییدشده",
+    `<div class="buyer-page">${billBoard(bills)}</div>`
+  );
+}
+
 async function renderDesk() {
   if (["manager", "executive_manager"].includes(state.me.role)) {
     await renderManagerDesk();
@@ -743,6 +1033,10 @@ async function renderDesk() {
   }
   if (state.me.role === "unit_manager") {
     await renderUnitManagerDesk();
+    return;
+  }
+  if (state.me.role === "buyer") {
+    await renderBuyerDesk();
     return;
   }
   const kind = state.kind === "case" ? "case" : "project";
@@ -788,15 +1082,14 @@ async function renderDesk() {
     seen.get(row.tag).items.push(row);
   });
   const showMoney = ["coordinator", "buyer", "manager", "admin"].includes(state.me.role);
-  const showOperationalDashboard = state.me.role !== "buyer";
+  const showOperationalDashboard = true;
   const caseMode = kind === "case";
   const pieces = new Set(board.map((row) => row.tag)).size;
   app.innerHTML = shell(
-    state.me.role === "buyer" ? "میز کار کارفرما" : caseMode ? "بازرسی موردی" : "بازرسی پروژه‌ها",
-    state.me.role === "buyer" ? "درخواست‌های بازرسی کارفرما · طرح فلامینگو" : caseMode ? "یک درخواست جدا، بدون برنامه چندنقطه‌ای" : "طرح فلامینگو · برنامه ITP تجهیزات ثابت",
+    caseMode ? "بازرسی موردی" : "بازرسی پروژه‌ها",
+    caseMode ? "یک درخواست جدا، بدون برنامه چندنقطه‌ای" : "طرح فلامینگو · برنامه ITP تجهیزات ثابت",
     `<div class="desk">
       ${manager ? managerTray(reports) : ""}
-      ${state.me.role === "buyer" ? buyerRequestTray(board) : ""}
       ${client ? clientTray(released) : ""}
       ${client ? billBoard(bills) : ""}
       ${showOperationalDashboard ? `
@@ -1455,6 +1748,113 @@ async function renderNotifications() {
   );
 }
 
+function persianDateParts(date) {
+  const parts = new Intl.DateTimeFormat("en-US-u-ca-persian-nu-latn", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    timeZone: "Asia/Tehran",
+  }).formatToParts(date);
+  return Object.fromEntries(parts.filter((part) => part.type !== "literal").map(({ type, value }) => [type, Number(value)]));
+}
+
+function persianMonthStart(offset) {
+  let start = new Date();
+  start.setHours(12, 0, 0, 0);
+  while (persianDateParts(start).day !== 1) {
+    start.setDate(start.getDate() - 1);
+  }
+  for (let step = 0; step < Math.abs(offset); step += 1) {
+    const direction = offset > 0 ? 1 : -1;
+    const probe = new Date(start);
+    probe.setDate(probe.getDate() + direction);
+    for (let day = 0; day < 33; day += 1) {
+      if (persianDateParts(probe).day === 1) {
+        start = probe;
+        break;
+      }
+      probe.setDate(probe.getDate() + direction);
+    }
+  }
+  const startParts = persianDateParts(start);
+  if (startParts.day !== 1) {
+    const probe = new Date(start);
+    for (let day = 0; day < 32; day += 1) {
+      probe.setDate(probe.getDate() - 1);
+      if (persianDateParts(probe).day === 1) return probe;
+    }
+  }
+  return start;
+}
+
+function persianDateKey(date) {
+  const { year, month, day } = persianDateParts(date);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+async function renderCalendar() {
+  const moments = await api("/api/moms");
+  const start = persianMonthStart(state.calendarOffset);
+  const monthParts = persianDateParts(start);
+  const monthTitle = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    month: "long",
+    year: "numeric",
+    timeZone: "Asia/Tehran",
+  }).format(start);
+  const days = [];
+  const cursor = new Date(start);
+  while (true) {
+    const parts = persianDateParts(cursor);
+    if (parts.year !== monthParts.year || parts.month !== monthParts.month) break;
+    days.push({ key: persianDateKey(cursor), day: parts.day });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  const eventsByDate = new Map();
+  moments.forEach((moment) => {
+    const day = String(moment.held_on || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+    const events = eventsByDate.get(day) || [];
+    events.push(moment);
+    eventsByDate.set(day, events);
+  });
+  const firstOffset = (start.getDay() + 1) % 7;
+  const calendarCells = [
+    ...Array.from({ length: firstOffset }, () => `<div class="calendar-cell calendar-blank" aria-hidden="true"></div>`),
+    ...days.map(({ key, day }) => {
+      const events = eventsByDate.get(key) || [];
+      const today = key === persianDateKey(new Date());
+      return `<article class="calendar-cell ${today ? "today" : ""} ${events.length ? "has-events" : ""}">
+        <b>${day.toLocaleString("fa-IR")}</b>
+        ${events.map((event) => `<span title="${esc(event.title)}">${esc(event.title)}</span>`).join("")}
+      </article>`;
+    }),
+  ];
+  const monthEvents = moments.filter((moment) => eventsByDate.has(String(moment.held_on || "").slice(0, 10))
+    && String(moment.held_on).slice(0, 7) === `${monthParts.year}-${String(monthParts.month).padStart(2, "0")}`);
+  app.innerHTML = shell(
+    "تقویم و برنامه‌ریزی",
+    "جلسه‌ها و یادداشت‌های ثبت‌شدهٔ پروژه در تقویم شمسی",
+    `<section class="calendar-layout">
+      <article class="card pad calendar-board">
+        <div class="calendar-heading">
+          <button class="ghost" data-act="calendar-next" aria-label="ماه بعد">ماه بعد ←</button>
+          <h2>${esc(monthTitle)}</h2>
+          <button class="ghost" data-act="calendar-prev" aria-label="ماه قبل">→ ماه قبل</button>
+        </div>
+        <div class="calendar-grid calendar-weekdays">${["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"].map((day) => `<b>${day}</b>`).join("")}</div>
+        <div class="calendar-grid">${calendarCells.join("")}</div>
+      </article>
+      <aside class="card pad calendar-agenda">
+        <div class="split"><h3>رویدادهای این ماه</h3><span class="chip">${monthEvents.length.toLocaleString("fa-IR")}</span></div>
+        <div class="calendar-events">${monthEvents.map((event) => `<article class="calendar-event">
+          <time>${esc(event.held_on)}</time><b>${esc(event.title)}</b><p>${esc(event.body)}</p><small>${esc(event.attendees || "شرکت‌کنندگان ثبت نشده‌اند")}</small>
+        </article>`).join("") || `<p class="empty">برای این ماه جلسه‌ای ثبت نشده است.</p>`}</div>
+        <button class="primary" data-act="goto" data-view="moms">ثبت / مشاهدهٔ صورتجلسه‌ها</button>
+      </aside>
+    </section>`
+  );
+}
+
 function renderRegistration() {
   app.innerHTML = shell(
     "ثبت‌نام اعضا",
@@ -1616,7 +2016,10 @@ async function render() {
   if (
     state.me.role === "buyer"
     && ["dispatch", "forms", "benchmark", "technology"].includes(state.view)
-    && !(state.view === "forms" && (state.requestPointId || state.inRequestMode || state.visitReportId))
+    && !(state.view === "forms" && (
+      state.requestPointId || state.inRequestMode || state.visitReportId
+      || (state.formKind === "in" && state.formId)
+    ))
   ) {
     state.view = "desk";
     state.viewHistory = [];
@@ -1631,6 +2034,15 @@ async function render() {
   }
   const views = {
     desk: renderDesk,
+    "buyer-new-in": renderBuyerNewIn,
+    "buyer-in-list": renderBuyerInList,
+    "buyer-itp-new": renderBuyerItpNew,
+    "buyer-itp-list": renderBuyerItpList,
+    "buyer-progress": renderBuyerProgress,
+    "buyer-completed": renderBuyerCompleted,
+    "buyer-status": renderBuyerStatus,
+    "buyer-date": renderBuyerDate,
+    "buyer-bills": renderBuyerBills,
     registration: renderRegistration,
     ivr: () => renderIvr(state.visitId),
     dispatch: renderDispatch,
@@ -1640,6 +2052,7 @@ async function render() {
     moms: renderMoms,
     forms: renderForms,
     notifications: renderNotifications,
+    calendar: renderCalendar,
     people: renderPeople,
     wallet: renderWallet,
     benchmark: renderBenchmark,
@@ -1721,10 +2134,14 @@ async function onClick(event) {
       state.requestPrefill = null;
       navigateTo("forms");
       await render();
+    } else if (act === "choose-in-location") {
+      state.requestCustomerLocation = node.dataset.location === "international" ? "international" : "iran";
+      await render();
     } else if (act === "begin-in-request") {
       state.formReturnView = state.view;
       state.inRequestMode = true;
       state.formKind = "in";
+      state.requestCustomerLocation = node.dataset.location === "international" ? "international" : "iran";
       state.formId = null;
       state.formDraft = null;
       const requestBoard = await api(`/api/board?kind=${state.kind === "case" ? "case" : "project"}`);
@@ -1735,7 +2152,7 @@ async function onClick(event) {
       state.pointId = Number(firstEligiblePoint.id);
       const detail = await api(`/api/points/${state.pointId}`);
       state.requestPointId = state.pointId;
-      state.requestPrefill = prefillInspectionRequest(detail);
+      state.requestPrefill = { ...prefillInspectionRequest(detail), customer_location: state.requestCustomerLocation };
       navigateTo("forms");
       await render();
     } else if (act === "open-request-form") {
@@ -1744,7 +2161,10 @@ async function onClick(event) {
       const detail = await api(`/api/points/${state.pointId}`);
       state.inRequestMode = true;
       state.requestPointId = state.pointId;
-      state.requestPrefill = prefillInspectionRequest(detail);
+      state.requestCustomerLocation = node.dataset.location === "international"
+        ? "international"
+        : state.requestCustomerLocation || "iran";
+      state.requestPrefill = { ...prefillInspectionRequest(detail), customer_location: state.requestCustomerLocation };
       state.formKind = "in";
       state.formId = null;
       state.formDraft = null;
@@ -1761,7 +2181,10 @@ async function onClick(event) {
       const detail = await api(`/api/points/${state.pointId}`);
       state.inRequestMode = true;
       state.requestPointId = state.pointId;
-      state.requestPrefill = prefillInspectionRequest(detail);
+      state.requestPrefill = {
+        ...prefillInspectionRequest(detail),
+        customer_location: state.requestCustomerLocation || "iran",
+      };
       state.formKind = "in";
       state.formId = null;
       navigateTo("forms");
@@ -1815,6 +2238,19 @@ async function onClick(event) {
     } else if (act === "manager-tab") {
       state.managerTab = node.dataset.tab;
       await render();
+    } else if (act === "calendar-prev" || act === "calendar-next") {
+      state.calendarOffset += act === "calendar-next" ? 1 : -1;
+      await render();
+    } else if (act === "convert-date") {
+      const input = document.querySelector("#buyer-date-input");
+      if (!input?.value) throw new Error("تاریخ میلادی را انتخاب کنید.");
+      const converted = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+        dateStyle: "long",
+        timeZone: "Asia/Tehran",
+      }).format(new Date(`${input.value}T12:00:00`));
+      const result = document.querySelector("#buyer-date-result");
+      if (result) result.textContent = `تاریخ شمسی: ${converted}`;
+      return;
     } else if (act === "approve-request-executive") {
       const result = await api(`/api/points/${node.dataset.id}/executive-approval`, {
         method: "POST",
@@ -2040,7 +2476,25 @@ document.addEventListener("keydown", (event) => {
 });
 
 app.addEventListener("click", onClick);
+app.addEventListener("submit", async (event) => {
+  if (event.target.id !== "login-form") return;
+  event.preventDefault();
+  try {
+    await loginWithCredentials();
+  } catch (error) {
+    toast(error.message);
+  }
+});
+app.addEventListener("input", (event) => {
+  const search = event.target.closest("[data-in-search]");
+  if (search) filterInRegistry(search.closest(".in-registry"));
+});
 app.addEventListener("change", async (event) => {
+  const registryFilter = event.target.closest("[data-in-filter]");
+  if (registryFilter) {
+    filterInRegistry(registryFilter.closest(".in-registry"));
+    return;
+  }
   const formLocation = event.target.closest("[data-form-key='customer_location']");
   if (formLocation) {
     state.formDraft = collectForm();
