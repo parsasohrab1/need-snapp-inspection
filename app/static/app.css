@@ -991,6 +991,89 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
 .buyer-in-form-actions .primary, .buyer-in-form-actions .ghost { min-width: 138px; }
 .buyer-in-form-actions .primary { color: white; background: #092452; }
 .buyer-international .buyer-in-form-actions { direction: ltr; }
+.international-in-page { --header-height: 122px; font-family: Arial, Helvetica, sans-serif; }
+.international-in-page .app-header h1 { font-size: clamp(22px, 2.2vw, 29px); }
+.international-in-page .app-brand img { width: 184px; }
+.international-in-page > .main { padding: 12px clamp(16px, 2.2vw, 30px) 18px; }
+.international-in-page > .main > .top { display: none; }
+.international-in-page .formpage { padding-bottom: 12px; }
+.international-in-page .buyer-in-top-actions { display: none; }
+.international-in-page .buyer-international {
+  gap: 4px;
+  padding: 8px;
+  border-radius: 8px;
+  box-shadow: 0 5px 16px rgba(20, 43, 82, .075);
+}
+.international-in-page .buyer-in-sheet-title {
+  min-height: 34px;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.international-in-page .buyer-in-sheet-title > span { font-size: 19px; }
+.international-in-page .buyer-in-sheet-title h2 { font-size: 18px; }
+.international-in-page .buyer-in-point-select {
+  display: block;
+  flex: 0 1 310px;
+  min-width: 190px;
+  max-width: 38%;
+  margin: 0 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.international-in-page .buyer-in-point-select select {
+  min-height: 26px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+.international-in-page .buyer-in-two-cards { gap: 5px; }
+.international-in-page .buyer-in-fields-card {
+  gap: 2px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.international-in-page .buyer-international .buyer-in-field {
+  grid-template-columns: minmax(112px, 34%) minmax(0, 1fr);
+  gap: 5px;
+  font-size: 12px;
+}
+.international-in-page .buyer-international > .buyer-in-field { grid-template-columns: 150px minmax(0, 1fr); }
+.international-in-page .buyer-in-field input,
+.international-in-page .buyer-in-field select,
+.international-in-page .buyer-in-field textarea {
+  min-height: 24px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.international-in-page .buyer-in-country { padding: 3px 7px; border-radius: 6px; }
+.international-in-page .buyer-in-country-control select { min-height: 24px; }
+.international-in-page .buyer-in-table-section { padding: 4px; border-radius: 7px; }
+.international-in-page .buyer-in-table-section h3 { margin-bottom: 2px; padding: 3px 6px; font-size: 11px; }
+.international-in-page .buyer-in-table { font-size: 10px; }
+.international-in-page .buyer-in-table th { padding: 2px 5px; }
+.international-in-page .buyer-in-table td { padding: 1px 3px; }
+.international-in-page .buyer-in-table td input { min-height: 22px; padding: 2px 5px; font-size: 10px; }
+.international-in-page .buyer-add-row { margin-top: 2px; padding: 2px 7px; }
+.international-in-page .buyer-international .buyer-in-remarks { padding: 4px 7px; border-radius: 6px; }
+.international-in-page .buyer-international .buyer-in-remarks textarea { min-height: 32px; }
+.international-in-page .buyer-in-form-actions { gap: 8px; }
+.international-in-page .buyer-in-form-actions .primary,
+.international-in-page .buyer-in-form-actions .ghost { min-width: 138px; min-height: 34px; }
+.international-in-page .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .login {
   min-height: 100vh;
   min-height: 100svh;
@@ -1185,6 +1268,12 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
   .login-features span { font-size: 20px; }
   .login-features b { font-size: 10px; }
   .shell { grid-template-columns: 1fr; grid-template-rows: 64px minmax(0,1fr) auto; }
+  .international-in-page { --header-height: 64px; }
+  .international-in-page > .main { padding: 10px 12px 20px; }
+  .international-in-page .app-brand img { width: 104px; }
+  .international-in-page .buyer-in-sheet-title { flex-wrap: wrap; }
+  .international-in-page .buyer-in-sheet-title h2 { flex-basis: calc(100% - 44px); }
+  .international-in-page .buyer-in-point-select { flex: 1 0 100%; max-width: none; margin: 0; }
   .app-header { padding: 0 14px; }
   .app-brand img { width: 104px; padding: 2px 4px; }
   .app-brand b { font-size: 12px; }

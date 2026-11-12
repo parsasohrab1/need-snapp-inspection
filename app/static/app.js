@@ -270,7 +270,7 @@ function shell(title, subtitle, body) {
   }
   if (state.me.role === "inspector") visibleItems.splice(2, 0, ["record", "کارنامه بازرسی"]);
   return `
-    <div class="shell">
+    <div class="shell ${state.view === "forms" && state.inRequestMode && state.requestCustomerLocation === "international" ? "international-in-page" : ""}">
       <header class="app-header">
         <div class="app-brand"><img src="/static/logo.png" alt="تکین‌کو؛ شرکت بازرسی فنی و کنترل خوردگی"><span><b>اسنپ‌بازرس</b><small>بازرسی و کنترل کیفیت</small></span></div>
         <h1>${esc(title)}</h1>
@@ -1823,7 +1823,7 @@ function buyerInCountry(payload, disabled) {
   </span></label>`;
 }
 
-function buyerInRequestForm(sheet, payload, { disabled, canSubmitRequest }) {
+function buyerInRequestForm(sheet, payload, { disabled, canSubmitRequest, pointOptions = "" }) {
   const international = payload.customer_location === "international";
   const findTable = (key) => (sheet.tables || []).find((table) => table.key === key);
   const actions = canSubmitRequest
@@ -1853,7 +1853,7 @@ function buyerInRequestForm(sheet, payload, { disabled, canSubmitRequest }) {
       buyerInField("Email Address:", "email", payload, { placeholder: "Enter email address...", disabled }),
     ].join("");
     return `<article class="buyer-in-sheet buyer-international" dir="ltr">
-      <header class="buyer-in-sheet-title"><span>⌖</span><h2>INSPECTION NOTIFICATION NO.</h2><strong>${esc(payload.number || "—")}</strong></header>
+      <header class="buyer-in-sheet-title"><span>⌖</span><h2>INSPECTION NOTIFICATION NO.</h2><strong>${esc(payload.number || "—")}</strong>${pointOptions}</header>
       <div class="buyer-in-two-cards"><section class="buyer-in-fields-card">${left}</section><section class="buyer-in-fields-card">${right}</section></div>
       <div class="buyer-in-two-cards buyer-in-contact-cards"><section class="buyer-in-fields-card">${representative}</section><section class="buyer-in-fields-card">${contact}</section></div>
       ${buyerInCountry(payload, disabled)}
@@ -2025,7 +2025,7 @@ async function renderForms() {
   const internationalPointOptions = state.inRequestMode
     && internationalIn
     && state.requestPoints.length
-    ? `<label class="buyer-in-point-select"><span>Inspection Point:</span><select data-buyer-in-point>${state.requestPoints.map((point) => `<option value="${point.id}" ${Number(point.id) === Number(state.requestPointId) ? "selected" : ""}>${esc(point.tag)} · ${esc(point.title)} — ${esc(point.project_name)}</option>`).join("")}</select></label>`
+    ? `<label class="buyer-in-point-select" aria-label="Inspection Point"><span class="sr-only">Inspection Point</span><select data-buyer-in-point aria-label="Inspection Point">${state.requestPoints.map((point) => `<option value="${point.id}" ${Number(point.id) === Number(state.requestPointId) ? "selected" : ""}>${esc(point.tag)} · ${esc(point.title)}</option>`).join("")}</select></label>`
     : "";
   app.innerHTML = shell(
     buyerInRequest ? (internationalIn ? "New IN Registration" : "ثبت IN داخل کشور") : `${displaySheet.code} · ${displaySheet.title_fa}`,
@@ -2038,11 +2038,10 @@ async function renderForms() {
         <button class="ghost" data-act="print-form">چاپ</button>
         ${!viewOnly && (!state.inRequestMode || canSubmitRequest) ? `<button class="primary" data-act="save-form">${canSubmitRequest ? "ثبت نهایی IN و ارسال به کارتابل مدیر پروژه" : "ثبت جاهای پر شده"}</button>` : ""}
       </div>`}
-      ${internationalPointOptions}
       ${state.inRequestMode && !buyerInRequest ? inRequestPointChooser(requestBoard, state.requestPointId) : ""}
       ${state.inRequestMode && !state.requestPointId ? `<p class="chip wait">برای تکمیل فرم، ابتدا نقطهٔ بازرسی را از فهرست بالا انتخاب کنید.</p>` : ""}
       <div class="formlayout ${buyerInRequest ? "buyer-in-formlayout" : ""}">
-        ${buyerInRequest ? buyerInRequestForm(displaySheet, sheet.payload, { disabled: formDisabled, canSubmitRequest }) : `<article class="sheet" id="sheet">
+        ${buyerInRequest ? buyerInRequestForm(displaySheet, sheet.payload, { disabled: formDisabled, canSubmitRequest, pointOptions: internationalPointOptions }) : `<article class="sheet" id="sheet">
           <header class="sheet-head">
             <div><b>${esc(displaySheet.code)}</b><h2>${esc(displaySheet.title)}</h2><p>${esc(displaySheet.title_fa)}</p></div>
             <div class="sheet-no"><span>شماره</span><strong>${esc(sheet.payload.number || "—")}</strong></div>
@@ -2885,7 +2884,7 @@ app.addEventListener("change", async (event) => {
       state.pointId = pointId;
       state.requestPointId = pointId;
       state.requestPrefill = prefill;
-      state.formDraft = { ...currentPayload, ...prefill };
+      state.formDraft = { ...currentPayload, ...prefill, location: currentPayload.location || prefill.location };
       await renderForms();
     } catch (error) {
       toast(error.message);
