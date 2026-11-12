@@ -1019,42 +1019,19 @@ async function renderBuyerNewIn() {
   const eligible = board.filter((row) => ["draft", "documents_missing", "returned"].includes(row.request_status));
   if (international) {
     state.requestPoints = eligible;
-    state.requestPointId = null;
-    state.requestPrefill = null;
-    state.inRequestMode = false;
-    const points = eligible.map((row) => ({
-      ...row,
-      searchText: [
-        row.tag,
-        INTERNATIONAL_POINT_TITLES[row.title],
-        internationalDemoValue(row.project_name),
-        internationalDisciplineLabel(row.discipline_label),
-      ].filter(Boolean).join(" ").toLocaleLowerCase("en-US"),
-    }));
-    app.innerHTML = shell(
-      "Inspection Point Selection",
-      "Choose an inspection point to complete an international IN form.",
-      `<div class="buyer-page buyer-international-point-page" dir="ltr">
-        <section class="card pad buyer-international-point-list">
-          <header class="buyer-international-point-heading">
-            <div><h2>Inspection Point Selection</h2><p>Choose an inspection point to complete an international IN form.</p></div>
-            <strong>${points.length.toLocaleString("en-US")} points</strong>
-          </header>
-          <label class="buyer-progress-search"><span aria-hidden="true">⌕</span><input type="search" data-international-point-search placeholder="Search inspection points..." aria-label="Search inspection points"></label>
-          <div class="buyer-international-point-rows">
-            ${points.map((point) => `<article class="buyer-international-point-row" data-international-point-row data-search="${esc(point.searchText)}">
-              <div class="buyer-international-point-details">
-                <h3><span>${esc(point.tag)}</span> · ${esc(INTERNATIONAL_POINT_TITLES[point.title] || point.title)}</h3>
-                <p>${esc(internationalDemoValue(point.project_name))}</p>
-                <div><span class="buyer-international-discipline">${esc(internationalDisciplineLabel(point.discipline_label))}</span><span class="buyer-international-ready">Ready for IN registration</span></div>
-              </div>
-              <button class="primary" data-act="open-request-form" data-id="${point.id}" data-location="international">Complete IN Form</button>
-            </article>`).join("") || `<p class="empty">No inspection points are currently available for IN registration.</p>`}
-          </div>
-          <p class="buyer-international-no-results" hidden>No inspection points match your search.</p>
-        </section>
-      </div>`
-    );
+    const firstEligiblePoint = eligible[0];
+    if (!firstEligiblePoint) throw new Error("No inspection points are currently available for IN registration.");
+    state.formReturnView = state.viewHistory[state.viewHistory.length - 1] || "desk";
+    state.inRequestMode = true;
+    state.formKind = "in";
+    state.formId = null;
+    state.formDraft = null;
+    state.pointId = Number(firstEligiblePoint.id);
+    const detail = await api(`/api/points/${state.pointId}`);
+    state.requestPointId = state.pointId;
+    state.requestPrefill = prefillInspectionRequestForLocation(detail, "international");
+    state.view = "forms";
+    await render();
     return;
   }
   const locations = [
@@ -2987,19 +2964,6 @@ app.addEventListener("submit", async (event) => {
   }
 });
 app.addEventListener("input", (event) => {
-  const internationalPointSearch = event.target.closest("[data-international-point-search]");
-  if (internationalPointSearch) {
-    const query = internationalPointSearch.value.trim().toLocaleLowerCase("en-US");
-    const rows = [...app.querySelectorAll("[data-international-point-row]")];
-    let visible = 0;
-    rows.forEach((row) => {
-      const matches = row.dataset.search.includes(query);
-      row.hidden = !matches;
-      if (matches) visible += 1;
-    });
-    const noResults = app.querySelector(".buyer-international-no-results");
-    if (noResults) noResults.hidden = visible > 0;
-  }
   const search = event.target.closest("[data-in-search]");
   if (search) filterInRegistry(search.closest(".in-registry"));
   const progressSearch = event.target.closest("[data-buyer-progress-search]");
