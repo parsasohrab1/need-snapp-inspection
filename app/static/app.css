@@ -1337,3 +1337,8 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
   .shell { display: block; }
   body { background: white; }
 }
+@media (min-width: 1101px) {
+  .international-in-page { grid-template-columns: 412px minmax(0, 1fr); }
+  .international-in-page > .side { margin: 22px 62px 27px 12px; }
+  .international-in-page > .main { padding: 12px 10px 18px 153px; }
+}

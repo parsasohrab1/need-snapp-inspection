@@ -2137,7 +2137,7 @@ async function renderForms() {
     ? `<label class="buyer-in-point-select" aria-label="Inspection Point"><span class="sr-only">Inspection Point</span><select data-buyer-in-point aria-label="Inspection Point">${state.requestPoints.map((point) => `<option value="${point.id}" ${Number(point.id) === Number(state.requestPointId) ? "selected" : ""}>${esc(internationalPointLabel(point))}</option>`).join("")}</select></label>`
     : "";
   app.innerHTML = shell(
-    buyerInRequest ? (internationalIn ? "New IN Registration" : "ثبت IN داخل کشور") : `${displaySheet.code} · ${displaySheet.title_fa}`,
+    buyerInRequest ? (internationalIn ? "ثبت IN جدید" : "ثبت IN داخل کشور") : `${displaySheet.code} · ${displaySheet.title_fa}`,
     buyerInRequest ? (internationalIn ? "Inspection Notification" : "درخواست یادداشت بازرسی") : displaySheet.title,
     `<div class="formpage">
       ${buyerInRequest ? `<div class="buyer-in-top-actions"><button class="ghost" data-act="print-form">${internationalIn ? "Print form" : "چاپ فرم"}</button></div>` : `<div class="formtabs">
