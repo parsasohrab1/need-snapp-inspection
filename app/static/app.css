@@ -831,6 +831,25 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
 .buyer-point-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 13px 2px; border-bottom: 1px solid var(--line); }
 .buyer-point-row > span { display: grid; gap: 5px; }
 .buyer-point-row small { color: var(--muted); }
+.buyer-international-point-page { direction: ltr; text-align: left; }
+.buyer-international-point-list { display: grid; gap: 12px; }
+.buyer-international-point-heading { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding-bottom: 10px; border-bottom: 1px solid #e1e6ef; }
+.buyer-international-point-heading h2 { color: #102a54; font-size: clamp(20px, 2.2vw, 26px); }
+.buyer-international-point-heading p { margin-top: 5px; color: var(--muted); }
+.buyer-international-point-heading > strong { flex: 0 0 auto; padding: 8px 12px; border-radius: 999px; color: #174b8f; background: #e9f1fb; font-size: 13px; }
+.buyer-international-point-page .buyer-progress-search { width: 100%; }
+.buyer-international-point-rows { display: grid; gap: 7px; }
+.buyer-international-point-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 14px; border: 1px solid #e0e5ed; border-radius: 10px; background: #fff; box-shadow: 0 2px 8px rgba(20, 43, 82, .045); }
+.buyer-international-point-row[hidden] { display: none; }
+.buyer-international-point-details { display: grid; gap: 6px; min-width: 0; }
+.buyer-international-point-details h3 { color: #142e59; font-size: 15px; }
+.buyer-international-point-details h3 span { color: #173d79; }
+.buyer-international-point-details p { color: #566783; font-size: 13px; }
+.buyer-international-point-details > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.buyer-international-discipline, .buyer-international-ready { display: inline-flex; padding: 4px 8px; border: 1px solid #dfe5ed; border-radius: 999px; color: #52637c; background: #f5f7fa; font-size: 11px; }
+.buyer-international-ready { border-color: #b7ddca; color: #17613f; background: #eaf7f0; font-weight: 700; }
+.buyer-international-point-row > button { flex: 0 0 auto; min-width: 145px; }
+.buyer-international-no-results { padding: 18px; color: var(--muted); text-align: center; }
 .buyer-status-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .buyer-status-card { display: grid; gap: 8px; border-top: 3px solid #3476c5; }
 .buyer-status-card span { color: var(--muted); }
@@ -1318,6 +1337,9 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
   .buyer-welcome, .buyer-page-intro { align-items: flex-start; flex-direction: column; padding: 16px; }
   .buyer-point-row { align-items: flex-start; flex-direction: column; }
   .buyer-point-row > button { width: 100%; }
+  .buyer-international-point-heading { align-items: flex-start; flex-direction: column; }
+  .buyer-international-point-row { align-items: stretch; flex-direction: column; }
+  .buyer-international-point-row > button { width: 100%; }
   .buyer-location-options { grid-template-columns: 1fr; gap: 10px; margin-top: 12px; }
   .buyer-location-option { min-height: 70px; padding: 11px 13px; }
   .buyer-location-option b { font-size: 15px; }
