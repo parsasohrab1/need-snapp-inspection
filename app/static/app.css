@@ -875,6 +875,102 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
 .buyer-location-icon { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #d9e1eb; border-radius: 11px; font-size: 23px; }
 .buyer-location-arrow { color: #55739f; font-size: 21px; }
 .buyer-point-list .buyer-page-intro { padding: 8px 0 14px; border: 0; box-shadow: none; background: transparent; }
+.buyer-in-top-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.buyer-in-formlayout { grid-template-columns: minmax(0, 1fr); }
+.buyer-in-sheet {
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+  padding: clamp(10px, 1.5vw, 18px);
+  border: 1px solid #dfe4ec;
+  border-radius: 16px;
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 8px 24px rgba(20, 43, 82, .09);
+}
+.buyer-international { direction: ltr; text-align: left; }
+.buyer-in-sheet-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  color: #102a54;
+  background: linear-gradient(110deg, #f8f9fb, #e9edf4);
+  box-shadow: 0 3px 10px rgba(20, 43, 82, .08);
+}
+.buyer-in-sheet-title > span { color: #53647d; font-size: 20px; }
+.buyer-in-sheet-title h2 { flex: 1; font-size: clamp(16px, 2vw, 22px); }
+.buyer-in-sheet-title strong { color: #65728a; font-size: 12px; }
+.buyer-in-two-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.buyer-in-fields-card {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e6e9ef;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 3px 11px rgba(20, 43, 82, .055);
+}
+.buyer-in-field { display: grid; gap: 4px; min-width: 0; color: #1c2635; font-size: 13px; font-weight: 700; }
+.buyer-international .buyer-in-field { grid-template-columns: minmax(105px, 34%) minmax(0, 1fr); align-items: center; }
+.buyer-international > .buyer-in-field { grid-template-columns: 150px minmax(0, 1fr); }
+.buyer-international > .buyer-in-field.wide { grid-column: 1 / -1; }
+.buyer-in-field input, .buyer-in-field select, .buyer-in-field textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  color: #202a39;
+  background: #f5f6f7;
+  box-shadow: inset 0 1px 2px rgba(20, 30, 45, .05);
+}
+.buyer-in-field textarea { resize: vertical; }
+.buyer-in-domestic .buyer-in-fields-card .buyer-in-field { gap: 4px; text-align: right; }
+.buyer-in-domestic .buyer-in-field input, .buyer-in-domestic .buyer-in-field select { text-align: right; }
+.buyer-in-location-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, .34fr);
+  gap: 8px 12px;
+  padding: 10px;
+  border: 1px solid #e4e8ef;
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 3px 11px rgba(20, 43, 82, .055);
+}
+.buyer-in-map-controls { align-self: end; }
+.buyer-in-map-preview { grid-column: 1 / -1; height: 84px; overflow: hidden; border-radius: 8px; background: #e7eef0; }
+.buyer-in-map-preview svg { display: block; width: 100%; height: 100%; background: transparent; border-radius: 0; }
+.buyer-in-table-section { min-width: 0; padding: 8px; border: 1px solid #dfe4ec; border-radius: 11px; background: white; }
+.buyer-in-table-section h3 { margin: 0 0 6px; padding: 5px 8px; border-radius: 6px 6px 0 0; color: #102a54; background: #d7e5f7; font-size: 13px; text-align: center; }
+.buyer-in-table { min-width: 650px; table-layout: auto; font-size: 12px; }
+.buyer-in-table th { padding: 5px 7px; color: #243248; background: #edf0f4; white-space: nowrap; }
+.buyer-in-table td { padding: 3px 4px; vertical-align: middle; }
+.buyer-in-table td:first-child { text-align: center; }
+.buyer-in-table td input {
+  width: 100%;
+  min-width: 82px;
+  min-height: 27px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: #fbfcfd;
+  font-size: 11px;
+}
+.buyer-international .buyer-in-table td input { text-align: left; }
+.buyer-add-row { margin-top: 5px; padding: 4px 9px; border: 1px solid #91afd9; border-radius: 6px; color: #123e78; background: #e6f0ff; font-size: 12px; font-weight: 750; }
+.buyer-remove-row { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; color: #8d3341; background: #f8e9eb; font-size: 18px; line-height: 1; }
+.buyer-remove-row:disabled { visibility: hidden; }
+.buyer-in-remarks { padding: 8px; border: 1px solid #dfe4ec; border-radius: 9px; background: #fff; }
+.buyer-international .buyer-in-remarks { direction: ltr; }
+.buyer-in-form-actions { display: flex; flex-wrap: wrap; gap: 9px; padding-top: 2px; }
+.buyer-in-form-actions .primary, .buyer-in-form-actions .ghost { min-width: 138px; }
+.buyer-in-form-actions .primary { color: white; background: #092452; }
+.buyer-international .buyer-in-form-actions { direction: ltr; }
 .login {
   min-height: 100vh;
   min-height: 100svh;
@@ -1104,6 +1200,12 @@ table.matrix th, table.matrix td, table.record th, table.record td { white-space
   .buyer-location-option b { font-size: 15px; }
   .buyer-in-entry { min-height: auto; padding: 18px 12px; }
   .buyer-calendar-day { min-height: 32px; }
+  .buyer-in-two-cards { grid-template-columns: 1fr; }
+  .buyer-international .buyer-in-field, .buyer-international > .buyer-in-field { grid-template-columns: minmax(100px, 34%) minmax(0, 1fr); }
+  .buyer-in-location-card { grid-template-columns: 1fr; }
+  .buyer-in-map-controls, .buyer-in-map-preview { grid-column: 1; }
+  .buyer-international .buyer-in-sheet-title { flex-wrap: wrap; }
+  .buyer-international .buyer-in-sheet-title h2 { flex-basis: calc(100% - 44px); }
 }
 @media print {
   .side, .top button, .actions, .formtabs, .formlayout > aside { display: none !important; }

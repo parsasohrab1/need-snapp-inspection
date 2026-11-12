@@ -147,10 +147,17 @@ const IN_EN = {
   "پیمانکار": "Contractor",
   "فروشنده": "Vendor",
   "سازنده": "Manufacturer",
+  "کد MC": "MC",
   "تاریخ بازرسی": "Inspection date",
   "مدت زمان بازرسی": "Inspection duration",
-  "اطلاعات تماس": "Contact details",
+  "نماینده فروشنده": "Vendor's Representative",
+  "شماره همراه": "Mobile No.",
+  "تلفن تماس": "Contact Phone No.",
+  "نشانی ایمیل": "Email Address",
   "محل": "Location",
+  "شهر محل بازرسی": "Inspection City",
+  "نشانی دقیق محل بازرسی": "Inspection Address",
+  "کد پروژه": "Project Code",
   "تگ تجهیز": "Equipment tag",
   "ردیف ITP": "ITP item",
   "نام بازرس": "Inspector",
@@ -177,7 +184,29 @@ function localizeInSheet(sheet) {
   copy.sections = copy.sections.map((section) => ({
     ...section,
     title: IN_EN[section.title] || section.title,
-    fields: section.fields.map((field) => ({ ...field, label: IN_EN[field.label] || field.label })),
+    fields: section.fields
+      .filter((field) => !sheet.tables?.some((table) => table.key === field.key))
+      .map((field) => ({ ...field, label: IN_EN[field.label] || field.label })),
+  }));
+  copy.tables = (sheet.tables || []).map((table) => ({
+    ...table,
+    title: table.key === "reference_documents" ? "Reference Documents" : table.key === "materials" ? "Extra Information & Remarks" : table.key === "items" ? "Item Description" : table.title,
+    columns: table.columns.map((column) => ({
+      ...column,
+      label: ({
+        title: "Document Title",
+        document_no: "Document No.",
+        issue_date: "Issue Date",
+        revision: "Revision / Code",
+        item_no: "Item No.",
+        material: "Material Description",
+        unit: "Unit",
+        quantity: "Quantity",
+        test_frequency: "Test Frequency",
+        item: "Item Name",
+        description: "Description",
+      })[column.key] || column.label,
+    })),
   }));
   return copy;
 }
@@ -1589,16 +1618,174 @@ function blankControl(field, value, disabled = false) {
   return `<label class="blank${wide}"><span>${label}</span><input data-form-key="${esc(field.key)}" value="${esc(value || "")}"${readonly}${required}></label>`;
 }
 
+function adaptInTablePayload(sheet) {
+  const payload = sheet.payload || {};
+  (sheet.tables || []).forEach((table) => {
+    if (Array.isArray(payload[table.key])) return;
+    const text = typeof payload[table.key] === "string" ? payload[table.key].trim() : "";
+    const fallbackKey = table.key === "materials" ? "material" : table.key === "items" ? "item" : table.columns[0]?.key;
+    const firstRow = Object.fromEntries(table.columns.map(({ key }) => [key, ""]));
+    if (text && fallbackKey) firstRow[fallbackKey] = text;
+    payload[table.key] = [firstRow];
+  });
+  sheet.payload = payload;
+  return sheet;
+}
+
+function buyerInField(label, key, payload, options = {}) {
+  const { placeholder = "", type = "text", wide = false, disabled = false } = options;
+  return `<label class="buyer-in-field${wide ? " wide" : ""}"><span>${esc(label)}</span><input type="${type}" data-form-key="${esc(key)}" value="${esc(payload[key] || "")}" placeholder="${esc(placeholder)}"${disabled ? " disabled" : ""}></label>`;
+}
+
+function buyerInSelect(label, key, payload, values, disabled = false) {
+  const selected = payload[key] || "";
+  const options = [...new Set([selected, ...values].filter(Boolean))];
+  return `<label class="buyer-in-field"><span>${esc(label)}</span><select data-form-key="${esc(key)}"${disabled ? " disabled" : ""}>
+    ${options.map((value) => `<option value="${esc(value)}" ${value === selected ? "selected" : ""}>${esc(value)}</option>`).join("")}
+  </select></label>`;
+}
+
+function buyerInTable(table, rows, { english = false, disabled = false } = {}) {
+  const labels = {
+    reference_documents: english
+      ? ["Document Title", "Document No.", "Issue Date", "Revision / Code"]
+      : ["عنوان سند", "شماره سند", "تاریخ صدور", "ویرایش / کد"],
+    materials: english
+      ? ["Item No.", "Material Description", "Unit", "Quantity", "Test Frequency"]
+      : ["ردیف", "شرح کالا / مواد", "واحد", "تعداد", "تناوب آزمون"],
+    items: english
+      ? ["Item No.", "Item Name", "Unit", "Quantity", "Description"]
+      : ["ردیف", "نام کالا", "واحد", "تعداد", "توضیحات"],
+  };
+  const columns = table.columns.map((column, index) => ({ ...column, label: labels[table.key]?.[index] || column.label }));
+  const visibleColumns = english && table.key === "reference_documents"
+    ? columns.filter((column) => column.key !== "issue_date")
+    : columns;
+  const rowList = rows?.length ? rows : [Object.fromEntries(columns.map(({ key }) => [key, ""]))];
+  const placeholders = {
+    "reference_documents.title": english ? "Enter document title..." : "عنوان سند را وارد کنید...",
+    "reference_documents.document_no": english ? "e.g., 5 pcs..." : "شماره سند",
+    "reference_documents.issue_date": english ? "YYYY/MM/DD" : "۱۴۰۳/۰۷/۱۵",
+    "reference_documents.revision": english ? "Enter revision/code..." : "ویرایش / کد",
+    "materials.material": english ? "e.g., Class 300 Valve" : "شرح کالا یا مواد",
+    "materials.quantity": english ? "e.g., 5 pcs..." : "مثلاً ۵ عدد",
+    "materials.test_frequency": english ? "e.g., Once per batch..." : "مثلاً یک‌بار در هر محموله",
+    "items.item": "نام کالا",
+    "items.quantity": "تعداد",
+    "items.description": "توضیحات",
+  };
+  return `<section class="buyer-in-table-section">
+    <h3>${esc(table.key === "reference_documents" ? (english ? "REFERENCE DOCUMENTS (P/O, ITP, Standards, Procedure, etc.)" : "اسناد مرجع") : table.key === "materials" ? (english ? "EXTRA INFORMATION & REMARKS" : "اطلاعات و اقلام اضافی") : (english ? "ITEM DESCRIPTION" : "شرح کالا"))}</h3>
+    <div class="tablewrap"><table class="buyer-in-table"><thead><tr><th>${english ? "Row" : "ردیف"}</th>${visibleColumns.map((column) => `<th>${esc(column.label)}</th>`).join("")}<th>${english ? "Actions" : "عملیات"}</th></tr></thead>
+      <tbody class="buyer-in-table-body" data-form-table-body="${esc(table.key)}">${rowList.map((row, index) => `<tr data-form-row="${index}">
+        <td>${(index + 1).toLocaleString(english ? "en-US" : "fa-IR")}</td>
+        ${visibleColumns.map((column) => `<td><input data-form-table="${esc(table.key)}" data-row="${index}" data-col="${esc(column.key)}" value="${esc(row?.[column.key] || "")}" placeholder="${esc(placeholders[`${table.key}.${column.key}`] || "")}"${disabled ? " disabled" : ""}></td>`).join("")}
+        <td><button class="buyer-remove-row" type="button" data-act="remove-form-row" data-table="${esc(table.key)}" data-row="${index}" aria-label="${english ? "Remove row" : "حذف ردیف"}"${disabled ? " disabled" : ""}>×</button></td>
+      </tr>`).join("")}</tbody></table></div>
+    ${disabled ? "" : `<button class="buyer-add-row" type="button" data-act="add-form-row" data-table="${esc(table.key)}">＋ ${english ? "Add Row" : "افزودن ردیف"}</button>`}
+  </section>`;
+}
+
+function buyerInMap(payload, disabled) {
+  const streets = `<svg viewBox="0 0 640 120" role="img" aria-label="پیش‌نمایش نقشهٔ محل بازرسی">
+    <rect width="640" height="120" fill="#e7eef0"/>
+    <path d="M-20 92 130 25 245 118 380 20 660 94M32-10 110 130M290-20 338 130M512-10 440 130M-10 50 650 60" fill="none" stroke="#fff" stroke-width="14"/>
+    <path d="M-20 92 130 25 245 118 380 20 660 94M32-10 110 130M290-20 338 130M512-10 440 130M-10 50 650 60" fill="none" stroke="#c8d6dd" stroke-width="2"/>
+    <circle cx="330" cy="58" r="13" fill="#c13e35"/><circle cx="330" cy="58" r="5" fill="#fff"/>
+  </svg>`;
+  return `<section class="buyer-in-location-card">
+    <div>${buyerInField("نشانی دقیق محل بازرسی", "location_address", payload, { placeholder: "نشانی کارگاه / محل بازرسی", disabled })}</div>
+    <div class="buyer-in-map-controls">${buyerInSelect("شهر", "location_city", payload, ["تهران", "اصفهان", "شیراز", "تبریز", "مشهد", "اهواز", "قزوین"], disabled)}</div>
+    <div class="buyer-in-map-preview">${streets}</div>
+  </section>`;
+}
+
+function buyerInRequestForm(sheet, payload, { disabled, canSubmitRequest }) {
+  const international = payload.customer_location === "international";
+  const findTable = (key) => (sheet.tables || []).find((table) => table.key === key);
+  const actions = canSubmitRequest
+    ? `<div class="buyer-in-form-actions"><button class="primary" data-act="save-form">✓ ${international ? "Submit" : "ثبت نهایی"}</button><button class="ghost" data-act="cancel-in-form">× ${international ? "Cancel" : "انصراف"}</button></div>`
+    : "";
+  if (international) {
+    const left = [
+      buyerInField("Client:", "client", payload, { placeholder: "Enter client name...", disabled }),
+      buyerInField("Contractor:", "contractor", payload, { placeholder: "Enter contractor name...", disabled }),
+      buyerInField("Vendor:", "vendor", payload, { placeholder: "Enter vendor name...", disabled }),
+      buyerInField("PO No.:", "po", payload, { placeholder: "PO-1403-XXXX", disabled }),
+      buyerInField("Inspection Date:", "inspection_date", payload, { type: "date", disabled }),
+    ].join("");
+    const right = [
+      buyerInField("Project Name:", "project", payload, { placeholder: "Enter project name...", disabled }),
+      buyerInField("MC:", "mc", payload, { placeholder: "Enter MC...", disabled }),
+      buyerInField("Manufacturer:", "manufacturer", payload, { placeholder: "Enter manufacturer...", disabled }),
+      buyerInField("P/I No.:", "pi", payload, { placeholder: "Enter P/I No...", disabled }),
+      buyerInField("Inspection Duration:", "duration", payload, { placeholder: "e.g., 3 days...", disabled }),
+    ].join("");
+    const representative = [
+      buyerInField("Vendor's Representative:", "vendor_representative", payload, { placeholder: "Enter representative name...", disabled }),
+      buyerInField("Mobile No.:", "mobile", payload, { placeholder: "Enter mobile number...", disabled }),
+    ].join("");
+    const contact = [
+      buyerInField("Contact Phone No.:", "contact_phone", payload, { placeholder: "Enter phone number...", disabled }),
+      buyerInField("Email Address:", "email", payload, { placeholder: "Enter email address...", disabled }),
+    ].join("");
+    return `<article class="buyer-in-sheet buyer-international" dir="ltr">
+      <header class="buyer-in-sheet-title"><span>⌖</span><h2>INSPECTION NOTIFICATION NO.</h2><strong>${esc(payload.number || "—")}</strong></header>
+      <div class="buyer-in-two-cards"><section class="buyer-in-fields-card">${left}</section><section class="buyer-in-fields-card">${right}</section></div>
+      <div class="buyer-in-two-cards buyer-in-contact-cards"><section class="buyer-in-fields-card">${representative}</section><section class="buyer-in-fields-card">${contact}</section></div>
+      ${buyerInField("Inspection Location:", "location", payload, { placeholder: "Enter inspection location...", disabled, wide: true })}
+      ${buyerInTable(findTable("reference_documents"), payload.reference_documents, { english: true, disabled })}
+      ${buyerInTable(findTable("materials"), payload.materials, { english: true, disabled })}
+      <label class="buyer-in-field buyer-in-remarks"><span>Remarks:</span><textarea data-form-key="remarks" rows="2"${disabled ? " disabled" : ""} placeholder="Enter any additional information or remarks here...">${esc(payload.remarks || "")}</textarea></label>
+      ${actions}
+    </article>`;
+  }
+  const left = [
+    buyerInField("پیمانکار", "contractor", payload, { placeholder: "نام پیمانکار را وارد کنید...", disabled }),
+    buyerInField("نام پروژه", "project", payload, { placeholder: "عنوان پروژه را وارد کنید...", disabled }),
+    buyerInField("کد پروژه", "project_code", payload, { placeholder: "کد پروژه", disabled }),
+  ].join("");
+  const right = [
+    buyerInField("مشتری", "client", payload, { placeholder: "نام مشتری را وارد کنید...", disabled }),
+    buyerInField("شماره PO", "po", payload, { placeholder: "PO-1403-XXXX", disabled }),
+    buyerInField("تاریخ بازرسی", "inspection_date", payload, { type: "date", disabled }),
+  ].join("");
+  return `<article class="buyer-in-sheet buyer-in-domestic" dir="rtl">
+    <header class="buyer-in-sheet-title"><span>⌖</span><h2>ثبت IN داخل کشور</h2><strong>${esc(payload.number || "—")}</strong></header>
+    <div class="buyer-in-two-cards"><section class="buyer-in-fields-card">${left}</section><section class="buyer-in-fields-card">${right}</section></div>
+    ${buyerInMap(payload, disabled)}
+    ${buyerInTable(findTable("reference_documents"), payload.reference_documents, { disabled })}
+    ${buyerInTable(findTable("items"), payload.items, { disabled })}
+    <label class="buyer-in-field buyer-in-remarks"><span>توضیحات تکمیلی</span><textarea data-form-key="remarks" rows="2"${disabled ? " disabled" : ""} placeholder="اطلاعات و توضیحات تکمیلی را وارد کنید...">${esc(payload.remarks || "")}</textarea></label>
+    ${actions}
+  </article>`;
+}
+
+function todayForInput() {
+  const parts = new Intl.DateTimeFormat("en-US-u-nu-latn", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Tehran",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function prefillInspectionRequest(detail) {
   return {
     customer_location: "iran",
     client: detail.companies.buyer,
     project: detail.project.name,
+    project_code: detail.project.code,
     po: detail.order.number,
+    inspection_date: todayForInput(),
     contractor: detail.companies.vendor,
     vendor: detail.companies.vendor,
     manufacturer: detail.companies.vendor,
     location: `${detail.equipment.workshop_name}، ${detail.equipment.city}`,
+    location_address: detail.equipment.workshop_name,
+    location_city: detail.equipment.city,
     tag: detail.equipment.tag,
     itp_item: String(detail.point.seq),
     discipline: detail.point.discipline_label,
@@ -1619,21 +1806,27 @@ function blankTable(table, rows, disabled = false) {
 
 function collectForm() {
   const spec = state.formSpec;
-  const payload = {};
+  const payload = { ...(spec.payload || {}) };
   document.querySelectorAll("[data-form-key]").forEach((el) => {
     payload[el.dataset.formKey] = el.value;
   });
   (spec.tables || []).forEach((table) => {
-    payload[table.key] = [];
-    for (let index = 0; index < table.rows; index += 1) {
-      const row = {};
-      table.columns.forEach((column) => {
-        const input = document.querySelector(`[data-form-table="${table.key}"][data-row="${index}"][data-col="${column.key}"]`);
-        row[column.key] = input ? input.value : "";
-      });
-      payload[table.key].push(row);
-    }
+    const inputs = document.querySelectorAll(`[data-form-table="${table.key}"]`);
+    if (!inputs.length) return;
+    const indexedRows = new Map();
+    inputs.forEach((input) => {
+      const index = Number(input.dataset.row);
+      if (!indexedRows.has(index)) indexedRows.set(index, {});
+      indexedRows.get(index)[input.dataset.col] = input.value;
+    });
+    payload[table.key] = [...indexedRows.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([, row]) => row);
   });
+  if (payload.customer_location !== "international" && ("location_address" in payload || "location_city" in payload)) {
+    const location = [payload.location_address, payload.location_city].filter(Boolean).join("، ");
+    if (location) payload.location = location;
+  }
   if (spec.tail) {
     spec.tail.fields.forEach((field) => {
       const input = document.querySelector(`[data-form-key="${field.key}"]`);
@@ -1645,7 +1838,7 @@ function collectForm() {
 
 async function renderForms() {
   if (state.visitReportId) {
-    const sheet = await api(`/api/visits/${state.visitReportId}/in-report-form`);
+    const sheet = adaptInTablePayload(await api(`/api/visits/${state.visitReportId}/in-report-form`));
     const displaySheet = sheet.payload.customer_location === "international" ? localizeInSheet(sheet) : sheet;
     state.formSpec = sheet;
     const viewOnly = !sheet.can_edit;
@@ -1662,7 +1855,8 @@ async function renderForms() {
         <article class="sheet" id="sheet">
           <header class="sheet-head"><div><b>${esc(displaySheet.code)}</b><h2>${esc(displaySheet.title)}</h2><p>${esc(displaySheet.title_fa)} — نسخهٔ گزارش بازرسی</p></div><div class="sheet-no"><span>شماره</span><strong>${esc(sheet.payload.number || "—")}</strong></div></header>
           <p class="hint">${esc(displaySheet.note)}</p>
-          ${displaySheet.sections.map((section) => `<section><h3>${esc(section.title)}</h3><div class="blanks">${section.fields.map((field) => blankControl(field, sheet.payload[field.key], viewOnly)).join("")}</div></section>`).join("")}
+          ${displaySheet.sections.map((section) => `<section><h3>${esc(section.title)}</h3><div class="blanks">${section.fields.filter((field) => !displaySheet.tables?.some((table) => table.key === field.key)).map((field) => blankControl(field, sheet.payload[field.key], viewOnly)).join("")}</div></section>`).join("")}
+          ${(displaySheet.tables || []).map((table) => `<section><h3>${esc(table.title)}</h3>${blankTable(table, sheet.payload[table.key], viewOnly)}</section>`).join("")}
         </article>
         ${sheet.can_edit ? `<div class="form-submit-sticky"><p><b>ثبت نسخهٔ گزارش</b><span>مدت و شرح بازرسی اجباری است؛ IN اصلی کارفرما تغییر نمی‌کند.</span></p><button class="primary" data-act="save-visit-report-form">ذخیره نسخهٔ گزارش</button></div>` : ""}
       </div>`
@@ -1679,6 +1873,7 @@ async function renderForms() {
       : api(`/api/forms?kind=${kind}`),
     state.inRequestMode ? api(`/api/board?kind=${state.kind === "case" ? "case" : "project"}`) : Promise.resolve([]),
   ]);
+  if (kind === "in") adaptInTablePayload(sheet);
   if (state.requestPrefill && !state.formId) sheet.payload = { ...sheet.payload, ...state.requestPrefill };
   if (state.formDraft && !state.formId) sheet.payload = { ...sheet.payload, ...state.formDraft };
   const displaySheet = kind === "in" && sheet.payload.customer_location === "international"
@@ -1689,32 +1884,34 @@ async function renderForms() {
     || (state.me.role === "buyer" && !state.inRequestMode);
   const formDisabled = viewOnly || (state.inRequestMode && !state.requestPointId);
   const canSubmitRequest = state.inRequestMode && Boolean(state.requestPointId);
+  const buyerInRequest = kind === "in" && state.me.role === "buyer";
+  const internationalIn = buyerInRequest && sheet.payload.customer_location === "international";
   const tabs = kind === "in"
     ? [["in", "IN"]]
     : state.me.role === "executive_manager"
     ? [["in", "IN"], ["itp", "ITP"], ["ivr", "IVR"], ["mom", "MOM"]]
     : state.me.role === "buyer" ? [["in", "IN"]] : [["ivr", "IVR"]];
   app.innerHTML = shell(
-    `${displaySheet.code} · ${displaySheet.title_fa}`,
-    displaySheet.title,
+    buyerInRequest ? (internationalIn ? "New IN Registration" : "ثبت IN داخل کشور") : `${displaySheet.code} · ${displaySheet.title_fa}`,
+    buyerInRequest ? (internationalIn ? "Inspection Notification" : "درخواست یادداشت بازرسی") : displaySheet.title,
     `<div class="formpage">
-      <div class="formtabs">
+      ${buyerInRequest ? `<div class="buyer-in-top-actions"><button class="ghost" data-act="print-form">${internationalIn ? "Print form" : "چاپ فرم"}</button></div>` : `<div class="formtabs">
         ${tabs.map(([id, label]) => `<button class="ghost ${kind === id ? "on" : ""}" data-act="form-kind" data-kind="${id}">${label}</button>`).join("")}
         ${canSubmitRequest ? `<label><input id="request-remote" type="checkbox"> درخواست بازرسی از راه دور</label>` : ""}
         ${!state.requestPointId ? `<button class="ghost" data-act="new-form">فرم تازه</button>` : ""}
         <button class="ghost" data-act="print-form">چاپ</button>
         ${!viewOnly && (!state.inRequestMode || canSubmitRequest) ? `<button class="primary" data-act="save-form">${canSubmitRequest ? "ثبت نهایی IN و ارسال به کارتابل مدیر پروژه" : "ثبت جاهای پر شده"}</button>` : ""}
-      </div>
-      ${state.inRequestMode ? inRequestPointChooser(requestBoard, state.requestPointId) : ""}
+      </div>`}
+      ${state.inRequestMode && !buyerInRequest ? inRequestPointChooser(requestBoard, state.requestPointId) : ""}
       ${state.inRequestMode && !state.requestPointId ? `<p class="chip wait">برای تکمیل فرم، ابتدا نقطهٔ بازرسی را از فهرست بالا انتخاب کنید.</p>` : ""}
-      <div class="formlayout">
-        <article class="sheet" id="sheet">
+      <div class="formlayout ${buyerInRequest ? "buyer-in-formlayout" : ""}">
+        ${buyerInRequest ? buyerInRequestForm(displaySheet, sheet.payload, { disabled: formDisabled, canSubmitRequest }) : `<article class="sheet" id="sheet">
           <header class="sheet-head">
             <div><b>${esc(displaySheet.code)}</b><h2>${esc(displaySheet.title)}</h2><p>${esc(displaySheet.title_fa)}</p></div>
             <div class="sheet-no"><span>شماره</span><strong>${esc(sheet.payload.number || "—")}</strong></div>
           </header>
           <p class="hint">${viewOnly && state.me.role === "inspector" ? "فرم IN خام و تأییدشدهٔ کارفرما؛ فقط برای مشاهده و مبنای تکمیل گزارش بازرسی." : esc(displaySheet.note)}</p>
-          ${displaySheet.sections.map((section) => `<section><h3>${esc(section.title)}</h3><div class="blanks">${section.fields.map((field) => blankControl(field, sheet.payload[field.key], formDisabled)).join("")}</div></section>`).join("")}
+          ${displaySheet.sections.map((section) => `<section><h3>${esc(section.title)}</h3><div class="blanks">${section.fields.filter((field) => !displaySheet.tables?.some((table) => table.key === field.key)).map((field) => blankControl(field, sheet.payload[field.key], formDisabled)).join("")}</div></section>`).join("")}
           ${(displaySheet.tables || []).map((table) => `<section><h3>${esc(table.title)}</h3>${blankTable(table, sheet.payload[table.key], formDisabled)}</section>`).join("")}
           ${displaySheet.tail ? `<section><h3>${esc(displaySheet.tail.title)}</h3><div class="blanks">${displaySheet.tail.fields.map((field) => blankControl(field, sheet.payload[field.key], formDisabled)).join("")}</div></section>` : ""}
         </article>
@@ -1723,9 +1920,9 @@ async function renderForms() {
           <div class="stack">
             ${saved.map((item) => `<button class="picked" data-act="open-sheet" data-id="${item.id}" data-kind="${item.kind}"><b>${esc(item.number)}</b><small>${esc(item.updated_at)}</small></button>`).join("") || `<p class="empty">هنوز فرمی ثبت نشده. جاهای خالی را پر کنید.</p>`}
           </div>
-        </aside>
+        </aside>`}
       </div>
-      ${canSubmitRequest ? `<div class="form-submit-sticky">
+      ${canSubmitRequest && !buyerInRequest ? `<div class="form-submit-sticky">
         <p><b>ثبت نهایی درخواست بازرسی</b><span>فرم IN ذخیره و برای بررسی به کارتابل مدیر پروژه ارسال می‌شود.</span></p>
         <button class="primary" data-act="save-form">ثبت نهایی IN و ارسال به کارتابل مدیر پروژه</button>
       </div>` : ""}
@@ -2092,6 +2289,31 @@ async function onClick(event) {
     } else if (act === "back") {
       goBack();
       await render();
+    } else if (act === "cancel-in-form") {
+      goBack();
+      await render();
+    } else if (act === "add-form-row" || act === "remove-form-row") {
+      if (!state.formSpec) throw new Error("فرم برای ویرایش آماده نیست.");
+      const table = state.formSpec.tables?.find((item) => item.key === node.dataset.table);
+      if (!table) throw new Error("جدول درخواستی در فرم تعریف نشده است.");
+      const payload = collectForm();
+      const rows = [...(payload[table.key] || [])];
+      if (act === "add-form-row") {
+        if (rows.length >= 100) throw new Error("حداکثر ۱۰۰ ردیف برای هر جدول مجاز است.");
+        rows.push(Object.fromEntries(table.columns.map(({ key }) => [key, ""])));
+      } else {
+        const rowIndex = Number(node.dataset.row);
+        if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= rows.length) {
+          throw new Error("ردیف انتخاب‌شده معتبر نیست.");
+        }
+        if (rows.length <= 1) {
+          rows[0] = Object.fromEntries(table.columns.map(({ key }) => [key, ""]));
+        } else {
+          rows.splice(rowIndex, 1);
+        }
+      }
+      state.formDraft = { ...payload, [table.key]: rows };
+      await render();
     } else if (act === "open-form") {
       state.formReturnView = state.view === "forms" ? state.formReturnView : state.view;
       state.inRequestMode = false;
@@ -2291,6 +2513,7 @@ async function onClick(event) {
         state.requestPointId = null;
         state.inRequestMode = false;
         state.requestPrefill = null;
+        state.requestCustomerLocation = null;
         state.formDraft = null;
         state.view = "point";
         toast(result.request_status === "documents_missing" ? result.message : "درخواست IN برای مدیر پروژه ارسال شد");

@@ -56,7 +56,9 @@ FORMS = {
                     _field("number", "شماره IN", required=True),
                     _field("date", "تاریخ", required=True),
                     _field("project", "پروژه", required=True),
+                    _field("project_code", "کد پروژه"),
                     _field("po", "شماره سفارش", required=True),
+                    _field("mc", "کد MC"),
                     _field("pi", "شماره PI"),
                     _field("contractor", "پیمانکار"),
                     _field("vendor", "فروشنده"),
@@ -64,7 +66,13 @@ FORMS = {
                     _field("inspection_date", "تاریخ بازرسی"),
                     _field("duration", "مدت زمان بازرسی"),
                     _field("contact", "اطلاعات تماس"),
+                    _field("vendor_representative", "نماینده فروشنده"),
+                    _field("mobile", "شماره همراه"),
+                    _field("contact_phone", "تلفن تماس"),
+                    _field("email", "نشانی ایمیل"),
                     _field("location", "محل", required=True),
+                    _field("location_city", "شهر محل بازرسی"),
+                    _field("location_address", "نشانی دقیق محل بازرسی"),
                     _field("tag", "تگ تجهیز", required=True),
                     _field("itp_item", "ردیف ITP", required=True),
                     _field("inspector", "نام بازرس"),
@@ -94,6 +102,26 @@ FORMS = {
                     _field("sign_ack_date", "تاریخ تأیید"),
                 ],
             },
+        ],
+        "tables": [
+            _table(
+                "reference_documents",
+                "مدارک مرجع",
+                [("title", "عنوان سند"), ("document_no", "شماره سند"), ("issue_date", "تاریخ صدور"), ("revision", "ویرایش / کد")],
+                1,
+            ),
+            _table(
+                "materials",
+                "اطلاعات و اقلام اضافی",
+                [("item_no", "ردیف"), ("material", "شرح کالا / مواد"), ("quantity", "تعداد"), ("test_frequency", "تناوب آزمون")],
+                1,
+            ),
+            _table(
+                "items",
+                "شرح کالا",
+                [("item", "نام کالا"), ("unit", "واحد"), ("quantity", "تعداد"), ("description", "توضیحات")],
+                1,
+            ),
         ],
     },
     "itp": {
@@ -289,7 +317,8 @@ def normalize(kind: str, payload: dict | None) -> dict:
         if not isinstance(rows, list):
             rows = []
         built = []
-        for index in range(table["rows"]):
+        row_count = max(table["rows"], min(len(rows), 100))
+        for index in range(row_count):
             source = rows[index] if index < len(rows) and isinstance(rows[index], dict) else {}
             built.append({column["key"]: _text(source.get(column["key"])) for column in table["columns"]})
             if index == 0:

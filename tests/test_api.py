@@ -231,6 +231,16 @@ def test_blank_forms_start_empty_and_keep_filled_lines():
                     "reference": "ASME",
                     "scope": "Material check",
                     "category": "inspection",
+                    "reference_documents": [
+                        {"title": "ITP", "document_no": "DOC-001", "revision": "A"},
+                        {"title": "MTC", "document_no": "DOC-002", "revision": "B"},
+                    ],
+                    "materials": [
+                        {"item_no": "1", "material": "Class 300 Valve", "quantity": "5 pcs", "test_frequency": "Once per batch"},
+                    ],
+                    "items": [
+                        {"item": "Class 300 Valve", "unit": "each", "quantity": "5", "description": "Body material"},
+                    ],
                 },
             },
         )
@@ -238,6 +248,9 @@ def test_blank_forms_start_empty_and_keep_filled_lines():
         international_form = client.get(f"/api/forms/{international.json()['id']}").json()
         assert international_form["payload"]["customer_location"] == "international"
         assert international_form["payload"]["client"] == "Overseas client"
+        assert international_form["payload"]["reference_documents"][1]["document_no"] == "DOC-002"
+        assert international_form["payload"]["materials"][0]["test_frequency"] == "Once per batch"
+        assert international_form["payload"]["items"][0]["description"] == "Body material"
         saved = client.post(
             "/api/forms",
             json={
